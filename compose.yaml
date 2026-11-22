@@ -1,0 +1,24 @@
+services:
+  deco-family-control:
+    build: .
+    restart: unless-stopped
+    init: true
+    env_file: .env
+    ports:
+      - "127.0.0.1:8088:8080"
+    volumes:
+      - family-data:/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request;urllib.request.urlopen(\"http://127.0.0.1:8080/openapi.json\", timeout=2)' >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+volumes:
+  family-data:
