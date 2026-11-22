@@ -1,5 +1,6 @@
 """Local-only API and responsive dashboard; not for public Internet exposure."""
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -8,7 +9,7 @@ import hmac
 import logging
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Header
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, Field, field_validator
 
@@ -66,8 +67,9 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
     engine = Engine(store, adapter, settings)
 
     def authenticate(credentials: HTTPBasicCredentials = Depends(security)):
-        if not (hmac.compare_digest(credentials.username.encode(), settings.admin_user.encode()) and
-                hmac.compare_digest(credentials.password.encode(), settings.admin_password.encode())):
+        valid_user = hmac.compare_digest(credentials.username.encode(), settings.admin_user.encode())
+        valid_password = hmac.compare_digest(credentials.password.encode(), settings.admin_password.encode())
+        if not (valid_user and valid_password):
             raise HTTPException(status_code=401, detail="Credenziali non valide",
                                 headers={"WWW-Authenticate": "Basic"})
         return credentials.username
@@ -78,26 +80,29 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
         if x_family_action != "1":
             raise HTTPException(403, "Missing anti-CSRF action header")
 
-    async def periodic():
-        while True:
+    async def periodic(stop: asyncio.Event):
+        while not stop.is_set():
             try:
                 await asyncio.to_thread(engine.poll)
             except Exception:
-                log.exception("Deco polling failed")
-            await asyncio.sleep(settings.poll_seconds)
+                log.warning("Interrogazione periodica del Deco non riuscita")
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=settings.poll_seconds)
+            except TimeoutError:
+                pass
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        task = asyncio.create_task(periodic())
+        stop = asyncio.Event()
+        task = asyncio.create_task(periodic(stop))
         try:
             yield
         finally:
-            task.cancel()
+            stop.set()
             try:
                 await task
-            except asyncio.CancelledError:
-                pass
-            store.close()
+            finally:
+                store.close()
 
     app = FastAPI(title="Deco Family Control", lifespan=lifespan, docs_url=None, redoc_url=None)
     app.state.engine = engine
@@ -127,7 +132,7 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
             "audit": store.audit(30),
             "stats_label": "Minuti di presenza Wi-Fi osservata (non tempo schermo né traffico Internet)",
             "capabilities": {
-                "client_inventory": True,
+                "client_inventory": engine.last_poll is not None and not engine.last_error,
                 "manual_block": "da_verificare_su_x50" if settings.mode == "deco" else "simulato",
                 "site_history": False,
                 "app_usage": False,
@@ -139,8 +144,17 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
     async def refresh():
         try:
             return await asyncio.to_thread(engine.poll)
-        except Exception as exc:
-            raise HTTPException(503, "Impossibile interrogare il Deco. Controlla il log del server.") from exc
+        except Exception:
+            raise HTTPException(503, "Impossibile interrogare il Deco. Controlla la diagnostica.") from None
+
+    @app.get("/api/diagnostics", dependencies=[Depends(authenticate)])
+    def diagnostics():
+        return JSONResponse(asdict(engine.diagnostics), headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/diagnostics", dependencies=[Depends(mutation_guard)])
+    def probe_diagnostics():
+        report = engine.probe_diagnostics()
+        return JSONResponse(asdict(report), headers={"Cache-Control": "no-store"})
 
     @app.post("/api/users", dependencies=[Depends(mutation_guard)])
     def new_user(payload: NewUser):

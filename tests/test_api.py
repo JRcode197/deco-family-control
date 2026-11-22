@@ -1,4 +1,10 @@
+import asyncio
+import sqlite3
+from threading import Event
+
 from fastapi.testclient import TestClient
+import pytest
+
 from app.config import Settings
 from app.deco import MockAdapter
 from app.main import create_app
@@ -36,3 +42,40 @@ def test_schedule_validation(tmp_path):
         })
         assert r.status_code == 200
         assert client.get("/api/state", auth=AUTH).json()["windows"][0]["user_id"] == uid
+
+
+def test_shutdown_waits_for_poll_before_closing_store(tmp_path):
+    cfg = Settings(database_path=str(tmp_path / "shutdown.sqlite"))
+    store = Store(cfg.database_path)
+    polling = Event()
+    finish_poll = Event()
+
+    class PendingPoll(MockAdapter):
+        def clients(self):
+            polling.set()
+            assert finish_poll.wait(timeout=5)
+            return super().clients()
+
+    app = create_app(cfg, store=store, adapter=PendingPoll())
+
+    async def exercise_lifespan():
+        lifespan = app.router.lifespan_context(app)
+        await lifespan.__aenter__()
+        try:
+            assert await asyncio.to_thread(polling.wait, 5)
+        except BaseException:
+            finish_poll.set()
+            await lifespan.__aexit__(None, None, None)
+            raise
+        shutdown = asyncio.create_task(lifespan.__aexit__(None, None, None))
+        try:
+            await asyncio.sleep(0)
+            assert not shutdown.done()
+            assert store.users() == []
+        finally:
+            finish_poll.set()
+            await shutdown
+
+    asyncio.run(exercise_lifespan())
+    with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+        store.users()
