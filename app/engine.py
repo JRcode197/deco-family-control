@@ -1,9 +1,14 @@
 """Network polling and cautious idempotent policy enforcement."""
 from datetime import datetime
+import logging
 from threading import RLock
+from time import monotonic
 from zoneinfo import ZoneInfo
 from app.deco import Client, HomeAssistantGuardActuator
+from app.diagnostics import Diagnostics, PROBE_INTERVAL_SECONDS
 from app.policy import local_day, policy_reason, schedule_active
+
+log = logging.getLogger(__name__)
 
 
 class Engine:
@@ -14,6 +19,17 @@ class Engine:
         self.lock = RLock()
         self.last_poll = None
         self.last_error = ""
+        self.diagnostics = Diagnostics(mode=settings.mode)
+        self._next_probe = 0.0
+
+    def probe_diagnostics(self) -> Diagnostics:
+        with self.lock:
+            if monotonic() >= self._next_probe:
+                report = self.adapter.diagnostics()
+                report.checked_at = datetime.now(ZoneInfo("UTC")).isoformat(timespec="seconds")
+                self.diagnostics = report
+                self._next_probe = monotonic() + PROBE_INTERVAL_SECONDS
+            return self.diagnostics
 
     def poll(self, now: datetime | None = None) -> dict:
         with self.lock:
@@ -33,8 +49,8 @@ class Engine:
                 self.last_error = ""
                 actions = self.enforce(now)
                 return {"clients": len(clients), "actions": actions}
-            except Exception as exc:
-                self.last_error = f"Interrogazione non riuscita ({type(exc).__name__}); controlla i log locali"
+            except Exception:
+                self.last_error = "Interrogazione non riuscita. Controlla la diagnostica."
                 self.store.log("poll", "errore", detail=self.last_error)
                 raise
 
@@ -85,8 +101,9 @@ class Engine:
               WHERE mac=?""", (int(should_block), status, mac))
             self.store.log("block" if should_block else "unblock", status, mac, reason)
             return {"mac": mac, "status": status, "reason": reason}
-        except Exception as exc:
-            msg = f"Comando fallito ({type(exc).__name__}); dettagli nei log locali"
+        except Exception:
+            msg = "Comando fallito. Esito del blocco da verificare."
+            log.warning("Comando di controllo rete fallito")
             self.store.execute("UPDATE devices SET last_error=? WHERE mac=?", (msg, mac))
             self.store.log("block" if should_block else "unblock", "errore", mac, msg)
             return {"mac": mac, "status": "errore", "detail": msg}

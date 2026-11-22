@@ -44,12 +44,31 @@ Sign in with `ADMIN_USER` / `ADMIN_PASSWORD`. Add Alice and Anna, assign mock de
 
 ## Staged, real-network X50 verification
 
-1. Save credentials only in `.env`: set `DECO_MODE=deco`, `DECO_ROUTER_IP=192.168.21.1`, `DECO_USERNAME`, `DECO_PASSWORD`; leave writes **false**, and restart. Check `/api/state` for discovered devices and `last_error`. All operations use the Deco LAN interface.
-2. In UI, create profiles and assign MACs. Verify Apple Private Wi-Fi Address **Fixed** (Fisso) on that SSID. Never identify a child solely by current IP address.
-3. Create a **test** profile / unimportant device, disconnect any secondary networks, and prepare local access to restore the router in the Deco app if necessary.
-4. First populate `PROTECTED_MACS` with the administration/automation host MACs, then set `DECO_WRITE_ENABLED=true` and restart. Set a temporary manual block on **only the test MAC**. Independently test that device's Internet truly stops, on Wi-Fi only, and returns after unblock. Check for collateral effects. If only the UI blocklist changes, disable writes and do not use SDK actuator for enforcement.
-5. If SDK is insufficient, separately install **Home Assistant + Deco Guard** and validate its X50 compatibility; configure `BLOCK_ACTUATOR=ha_guard`, `HA_URL`, `HA_TOKEN` only after its own successful device test. HA's HTTP 200 means command accepted, still not packet-level verification.
-6. Only after successful tests apply to children's devices. Keep `QUOTA_ENFORCEMENT=false` until actual activity sensing is implemented and verified. Follow upgrade-safe tests after every firmware update.
+### Read-only diagnostics on the home LAN
+
+1. On a machine connected directly to the home LAN, edit the ignored `.env`. Set `DECO_MODE=deco`, `DECO_ROUTER_IP=192.168.21.1`, `DECO_USERNAME` and `DECO_PASSWORD` to the local web login details. Keep `DECO_WRITE_ENABLED=false` and `QUOTA_ENFORCEMENT=false`. Start or recreate the service with `docker compose up --build -d`.
+2. Sign in to the local dashboard and select **Diagnostica Deco X50 → Esegui verifica in sola lettura**. The probe uses one session to check client inventory, gateway firmware, and blocklist readability. An empty list counts as a successful read. A response missing its expected list is marked unusable. An explicitly unavailable endpoint is marked unsupported.
+3. Open **Risultato JSON** and return that JSON in the issue or PR, along with the hardware revision from the Deco app if known. The report contains statuses, counts, and recognized firmware metadata. Share only that report and the requested metadata. `/api/state`, screenshots and database exports can contain household device identifiers.
+
+The authenticated `GET /api/diagnostics` returns the latest report from memory. The dashboard's authenticated `POST /api/diagnostics` requires `X-Family-Action: 1` and runs at most once per minute. A temporary SDK failure pauses router requests for 60 seconds. After an authentication failure, correct the local credentials and recreate the service to retry. The pinned SDK uses the router's HTTPS endpoint with certificate verification disabled in its transport. Run the real integration on a trusted home LAN.
+
+### Separate physical block/unblock test
+
+Run this only on the home LAN after explicitly authorizing router writes for the test. Use a fresh test database with no active rules or quotas, a spare Wi-Fi client with a stable MAC, and a second administration device. Record that both devices can reach the Internet initially. Disable cellular and other fallback connections on the spare device. Add the management host and device MACs to `PROTECTED_MACS` before enabling local commands.
+
+Using the SDK actuator, issue a manual block for **only the spare device**. Record whether the router accepted the command and whether a fresh HTTPS request from the device fails while the administration device stays online. Unblock the spare device and verify a fresh HTTPS request succeeds again. If the app cannot undo the block, remove it from the Deco app using the administration device. Restore `DECO_WRITE_ENABLED=false` and recreate the service.
+
+Report the firmware, actuator, command response, connectivity before/during/after, and whether the administration device stayed online. Omit device identifiers and credentials. Use **physically verified** only when the test shows both loss and recovery of connectivity. A blocklist entry or HTTP success records **command accepted (unverified)**. Repeat the test after firmware or actuator changes.
+
+### Compatibility matrix
+
+| Capability | SDK or integration evidence | Deco X50 · 1.11.1 Build 26081714 Rel. 32981 |
+| --- | --- | --- |
+| Client inventory and gateway firmware | SDK 2.2.0 documents local inventory and mesh device-list reads. The diagnostic checks them individually. | Pending a local **read-only detected** result. An explicit HTTP 404 or 501 for a read is **not supported**. |
+| Blocklist visibility | `clients.get_blocked()` reads the mesh blocklist. The diagnostic validates the list shape and reports only its count. | Read-only check pending. |
+| Actual Internet block and recovery | `clients.block()` sends a blocklist operation. `clients.unblock()` sends the inverse operation. | **Unverified** until the separate physical test. |
+| Presence and sampled speeds | Presence counts observed Wi-Fi connection minutes. SDK speed fields are instantaneous KB/s samples. SDK `get_client_totals()` sums speeds. | Sample availability pending. Byte counters, iOS screen time and app/site history are unavailable in this integration. |
+| Optional Home Assistant Deco Guard | Separate GPL-3.0-or-later integration. Upstream reports testing on BE85 fw 1.2.4 and uses the app management protocol to complement the web API. | X50 compatibility and physical enforcement pending. |
 
 ## Development
 
@@ -65,9 +84,15 @@ pytest -q
 
 SDK install: `pip install -r requirements-deco.txt` using Python 3.14.
 
+### Issue #1 review and test coverage
+
+- The API uses HTTP Basic for the dashboard and protected routes, plus `X-Family-Action` for actions. The diagnostic's cached GET performs no router I/O. Neither the diagnostic nor the application's failure logs include raw SDK responses, exception messages or session URLs.
+- SQLite uses one connection guarded by a lock. Shutdown waits for the polling worker before closing it. Policy and snapshot writes currently commit statement by statement. Multi-statement atomicity and crash recovery still need dedicated tests.
+- Fake SDK sessions cover endpoint absence, empty and malformed results, credential failure, retry backoff, read-only operation selection and redaction. API tests cover authentication, the action header and result caching. Real firmware response shapes, device reachability, and sustained polling under concurrent requests require separate verification.
+
 ## Next development tasks for Codex
 
-See [`PRD.md`](PRD.md) and [`CODEX_START.md`](CODEX_START.md). Highest priority: X50 read-only capability probe and safe real block/unblock test, followed by detailed usage telemetry sourced from an appropriate local data source. Never fake web histories or infer app usage from LAN presence.
+See [`PRD.md`](PRD.md) and [`CODEX_START.md`](CODEX_START.md). Collect the X50 read-only results and run the separate block/unblock field test. Detailed usage telemetry requires an appropriate local data source.
 
 ## Third-party projects evaluated
 

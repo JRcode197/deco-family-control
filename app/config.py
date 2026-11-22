@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from os import environ
 from zoneinfo import ZoneInfo
 
@@ -8,9 +8,9 @@ class Settings:
     mode: str = "mock"
     router_ip: str = "192.168.21.1"
     router_user: str = "admin"
-    router_password: str = ""
+    router_password: str = field(default="", repr=False)
     admin_user: str = "admin"
-    admin_password: str = ""
+    admin_password: str = field(default="", repr=False)
     database_path: str = "/data/family.sqlite3"
     timezone: str = "Europe/Rome"
     poll_seconds: int = 60
@@ -18,7 +18,7 @@ class Settings:
     quota_enforcement: bool = False
     actuator: str = "sdk"
     ha_url: str = ""
-    ha_token: str = ""
+    ha_token: str = field(default="", repr=False)
     protected_macs: tuple[str, ...] = ()
 
 
