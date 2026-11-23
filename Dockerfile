@@ -7,5 +7,6 @@ WORKDIR /opt/app
 COPY requirements-deco.txt requirements.txt ./
 RUN pip install --no-cache-dir -r requirements-deco.txt && useradd --create-home --uid 10001 family && mkdir /data && chown family:family /data
 COPY --chown=family:family app ./app
+COPY --chown=family:family config.yaml ./
 EXPOSE 8080
 CMD ["python", "-m", "app.server"]

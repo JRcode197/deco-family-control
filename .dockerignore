@@ -1,6 +1,7 @@
 *
 !requirements.txt
 !requirements-deco.txt
+!config.yaml
 !app/
 !app/**
 **/__pycache__/

@@ -1,5 +1,7 @@
 from dataclasses import replace
 import json
+from pathlib import Path
+import re
 
 from fastapi.testclient import TestClient
 import pytest
@@ -77,8 +79,10 @@ def test_home_assistant_inventory_assignment_and_history_persist(tmp_path, monke
         assert client.post("/api/refresh", headers=ACTION).status_code == 200
         state = client.get("/api/state")
         assert state.headers["cache-control"] == "no-store"
+        manifest = Path(__file__).resolve().parents[1] / "config.yaml"
+        assert re.search(r'^version: "([^"]+)"$', manifest.read_text(), re.M)[1] == state.json()["release"]
         [device] = state.json()["devices"]
-        assert device["mac"] == MAC and device["online"]
+        assert device["mac"] == MAC and device["online"] and device["in_latest_snapshot"]
         assert device["up_kbs"] == 0 and device["down_kbs"] == 23
         assert FIXTURE_SECRET not in state.text
         person = client.post("/api/users", headers=ACTION, json={"name": "Alice"}).json()["id"]
@@ -104,7 +108,8 @@ def test_home_assistant_inventory_assignment_and_history_persist(tmp_path, monke
         snapshot.clear()
         assert client.post("/api/refresh", headers=ACTION).status_code == 200
         [offline] = client.get("/api/state").json()["devices"]
-        assert not offline["online"] and offline["user_id"] == person and offline["down_kbs"] is None
+        assert not offline["online"] and not offline["in_latest_snapshot"]
+        assert offline["user_id"] == person and offline["down_kbs"] is None
 
     with TestClient(create_app(settings), client=(SUPERVISOR_IP, 9000)) as restarted:
         assert restarted.post("/api/refresh", headers=ACTION).status_code == 200
@@ -117,4 +122,5 @@ def test_home_assistant_inventory_assignment_and_history_persist(tmp_path, monke
         assert restarted.post("/api/refresh", headers=ACTION).status_code == 200
         [renamed] = restarted.get("/api/state").json()["devices"]
         assert renamed["name"] == "iPhone rinominato" and renamed["user_id"] == person
+        assert renamed["in_latest_snapshot"]
     assert FIXTURE_SECRET.encode() not in database_path.read_bytes()

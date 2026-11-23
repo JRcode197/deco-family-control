@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, Field, SecretStr, StringConstraints, field_validator
 
-from app.config import Settings, from_env, private_router_ip
+from app.config import Settings, from_env, private_router_ip, release_version
 from app.deco import Adapter, MockAdapter, DecoSdkAdapter, normalize_mac
 from app.diagnostics import PROBE_INTERVAL_SECONDS, ProbeCooldown
 from app.engine import Engine
@@ -83,6 +83,7 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
     ))
     engine = Engine(store, adapter, settings)
     inventory_only = settings.ha_ingress and settings.mode == "deco"
+    release = release_version()
 
     def admin_authenticate(credentials: HTTPBasicCredentials = Depends(security)):
         valid_user = hmac.compare_digest(credentials.username.encode(), settings.admin_user.encode())
@@ -146,7 +147,12 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
     @app.get("/api/state", dependencies=[Depends(authenticate)])
     def state():
         day = datetime.now(ZoneInfo(settings.timezone)).date().isoformat()
+        with store.lock:
+            last_poll = engine.last_poll
+            last_error = engine.last_error
+            devices = store.devices(sample_minute=engine.last_sample_minute, snapshot_at=last_poll)
         return JSONResponse({
+            "release": release,
             "mode": settings.mode,
             "ha_ingress": settings.ha_ingress,
             "inventory_only": inventory_only,
@@ -155,16 +161,16 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
             "quota_enforcement": settings.quota_enforcement,
             "actuator": settings.actuator,
             "protected_macs": list(settings.protected_macs),
-            "last_poll": engine.last_poll,
-            "last_error": engine.last_error,
+            "last_poll": last_poll,
+            "last_error": last_error,
             "users": store.users(),
-            "devices": store.devices(sample_minute=engine.last_sample_minute),
+            "devices": devices,
             "windows": store.windows(),
             "usage_today": store.usage(day),
             "audit": store.audit(30),
             "stats_label": "Minuti di presenza Wi-Fi osservata (non tempo schermo né traffico Internet)",
             "capabilities": {
-                "client_inventory": engine.last_poll is not None and not engine.last_error,
+                "client_inventory": last_poll is not None and not last_error,
                 "manual_block": "da_verificare_su_x50" if settings.mode == "deco" else "simulato",
                 "site_history": False,
                 "app_usage": False,

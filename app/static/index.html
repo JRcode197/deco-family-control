@@ -9,16 +9,20 @@ main{max-width:1050px;margin:auto;padding:18px;display:grid;gap:14px}.cols{displ
 form,.control{display:flex;flex-wrap:wrap;gap:8px}form{margin-bottom:12px}button,input,select{font:inherit;padding:10px;border-radius:9px;border:1px solid #526776;background:#263944;color:white;max-width:100%;min-width:0}input{width:135px}button{background:#087f95;cursor:pointer}button.danger{background:#a34149;border-color:#b85b61}button.subtle{background:#29404f}button:disabled{opacity:.5}label{font-size:.84rem}.flag{display:inline-block;border-radius:99px;padding:5px 10px;margin:6px 8px 0 0;background:#354c5c;font-size:.83rem}.safe{background:#174d41;color:#a3e9cb}.warning{background:#573724;color:#ffe0b2}.notice{font-size:.88rem;line-height:1.5;color:#bed0d9}.error{color:#ffaaaa}.success{color:#9de6c7}#message{min-height:24px;margin:0}table{width:100%;border-collapse:collapse;font-size:.83rem}td,th{border-bottom:1px solid #314452;padding:8px;text-align:left}a{color:#7ad7e9}.tablewrap{overflow-x:auto}
 .diagnostic-form{align-items:end;gap:12px}.diagnostic-form label{display:grid;gap:4px}.diagnostic-form input{width:185px}
 .inventory-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.inventory-tools input{width:200px}
+#release{display:block;margin-top:4px}#previous-devices{margin-top:12px}#previous-devices summary{cursor:pointer;color:#aabac6;font-size:.9rem}
 @media(max-width:740px){.cols{grid-template-columns:1fr}header{padding:18px}.panel{padding:14px}}
 </style></head><body>
-<header><h1>🛡 Deco Family Control</h1><p>TP-Link Deco X50 · controllo parentale locale</p><div id="badges"></div></header>
+<header><h1>🛡 Deco Family Control</h1><small id="release" class="muted"></small><p>TP-Link Deco X50 · controllo parentale locale</p><div id="badges"></div></header>
 <main><p id="message" aria-live="polite"></p>
 <div class="cols">
 <section class="panel"><h2>Persone</h2><form id="add-user"><input id="user-name" aria-label="Nome della persona" placeholder="Alice o Anna" maxlength="60" required><button>Crea profilo</button></form><div id="users"></div></section>
 <section class="panel"><h2>Dispositivi</h2>
-<div class="inventory-tools"><button class="subtle" id="refresh">Aggiorna elenco</button><input id="device-filter" type="search" aria-label="Cerca dispositivo" placeholder="Cerca dispositivo"></div>
+<div class="inventory-tools"><button class="subtle" id="refresh">Leggi dal Deco</button><input id="device-filter" type="search" aria-label="Cerca dispositivo" placeholder="Cerca dispositivo"></div>
 <p id="inventory-status" class="notice" aria-live="polite"></p>
-<p class="notice">Scegli una persona accanto al dispositivo. Per gli iPhone usa un indirizzo Wi-Fi privato fisso sul tuo SSID.</p><div id="devices"></div></section>
+<p class="notice">Scegli una persona accanto al dispositivo. Per gli iPhone usa un indirizzo Wi-Fi privato fisso sul tuo SSID.</p>
+<div id="devices"></div>
+<details id="previous-devices" hidden><summary id="previous-device-count"></summary><div id="device-history"></div></details>
+</section>
 </div>
 <div class="cols">
 <section class="panel" id="policy-panel"><h2>Blocchi programmati</h2>
@@ -54,8 +58,8 @@ function drop(options,value,click){const e=node("select");for(const o of options
 async function api(path,method="GET",data){const o={method,headers:{"X-Family-Action":"1"}};if(data!==undefined){o.headers["Content-Type"]="application/json";o.body=JSON.stringify(data)}
  const r=await fetch("api/"+path,o);let v;try{v=await r.json()}catch{v={detail:"Risposta non valida"}}if(!r.ok)throw Error(v.detail||"HTTP "+r.status);return v}
 function msg(text,err){$("message").textContent=text;$("message").className=err?"error":"success"}
-const successMessages={users:"Profilo creato.",assign:"Assegnazione salvata.",refresh:"Elenco aggiornato."};
-async function execute(path,data,method="POST"){try{const v=await api(path,method,data);const errs=(v.actions||[]).filter(a=>a.status==="errore");msg(errs.length?"Comando fallito: consulta il registro":successMessages[path]||"Operazione registrata.",!!errs.length);await refresh()}catch(e){msg(e.message,true);if(path==="assign")await refresh()}}
+const successMessages={users:"Profilo creato.",assign:"Assegnazione salvata.",refresh:"Lettura completata."};
+async function execute(path,data,method="POST"){try{const v=await api(path,method,data);const errs=(v.actions||[]).filter(a=>a.status==="errore");msg(errs.length?"Comando fallito: consulta il registro":successMessages[path]||"Operazione registrata.",!!errs.length);await refresh()}catch(e){if(path==="assign"||path==="refresh")await refresh();msg(e.message,true)}}
 async function refresh(){try{S=await api("state");render();const h=await api("usage?days=7");history(h.data)}catch(e){msg(e.message,true)}}
 const diagnosticLabels = {
  not_checked: "Da verificare", simulated: "Simulato", read_only_detected: "Rilevato in sola lettura",
@@ -92,20 +96,9 @@ async function loadDiagnostics(method="GET", credentials){
 const actionLabel = status => ["inviato_non_verificato","accettato_da_ha_non_verificato"].includes(status)
  ? "Comando accettato (da verificare)" : status;
 const speed = value => value===null?"n/d":value+" KB/s";
-function renderDevices(){
- const list=$("devices"), term=$("device-filter").value.trim().toLowerCase();
- const devices=S.devices.filter(d=>[d.name,d.mac,d.ip,d.user_name].some(v=>v?.toLowerCase().includes(term)));
- const online=S.devices.filter(d=>d.online).length;
- const current=!!S.last_poll&&!S.last_error;
- const status=$("inventory-status");
- const total=term?devices.length+" di "+S.devices.length+" dispositivi":S.devices.length+" dispositivi";
- status.textContent=[total,current?online+" rilevati online":"Stato in attesa di aggiornamento",
-   S.last_error||(S.ha_ingress&&S.mode==="mock"?"Per leggere il Deco, attiva l’inventario reale nella configurazione dell’app in Home Assistant.":"")
- ].filter(Boolean).join(" · ");
- list.replaceChildren();
- for(const d of devices){
+function deviceRow(d, current){
   const row=node("div",undefined,"item"), left=node("div"), controls=node("div",undefined,"control");
-  const availability=current?(d.online?"Online":"Offline · già rilevato"):"Rilevato in precedenza";
+  const availability=current?(d.online?"Online":"Offline"):"Rilevato in precedenza";
   add(left,node("strong",d.name),node("small",[d.mac,d.ip,availability].filter(Boolean).join(" · ")));
   if(current&&(d.down_kbs!==null||d.up_kbs!==null))left.append(node("small","Ultimo campione · ↓ "+speed(d.down_kbs)+" · ↑ "+speed(d.up_kbs)));
   if(d.last_action&&!S.inventory_only)left.append(node("small",actionLabel(d.last_action)));
@@ -117,10 +110,35 @@ function renderDevices(){
    if(S.protected_macs.includes(d.mac))controls.append(node("span","Protetto","flag safe"));
    else controls.append(btn(d.manually_blocked?"Sblocca":"Blocca",()=>execute("manual-block",{mac:d.mac,blocked:!d.manually_blocked}),d.manually_blocked?"subtle":"danger"));
   }
-  add(row,left,controls);list.append(row);
- }
+  add(row,left,controls);
+  return row;
+}
+function renderDevices(){
+ const term=$("device-filter").value.trim().toLowerCase();
+ const matches=d=>[d.name,d.mac,d.ip,d.user_name].some(value=>value?.toLowerCase().includes(term));
+ const current=Boolean(S.last_poll&&!S.last_error);
+ const latest=S.devices.filter(d=>current&&d.in_latest_snapshot);
+ const previous=S.devices.filter(d=>!current||!d.in_latest_snapshot);
+ const shownLatest=latest.filter(matches), shownPrevious=previous.filter(matches);
+ const details=$("previous-devices");
+ const time=S.last_poll&&new Date(S.last_poll).toLocaleString();
+ const online=latest.filter(d=>d.online).length;
+ const count=term?shownLatest.length+" di "+latest.length:latest.length;
+ $("inventory-status").textContent=[
+  current?"Ultima lettura "+time+" · "+count+" dispositivi · "+online+" online":S.last_error||"In attesa della prima lettura.",
+  !current&&time?"Ultima lettura riuscita "+time:"",
+  S.ha_ingress&&S.mode==="mock"?"Per leggere il Deco, attiva l’inventario reale nella configurazione dell’app in Home Assistant.":""
+ ].filter(Boolean).join(" · ");
+ $("devices").replaceChildren(...shownLatest.map(d=>deviceRow(d,true)));
+ if(current&&!shownLatest.length)$("devices").append(node("p",term?"Nessuna corrispondenza nell’ultima lettura.":"Nessun dispositivo nell’ultima lettura.","notice"));
+ details.hidden=!shownPrevious.length;
+ if(term&&shownPrevious.length)details.open=true;
+ $("previous-device-count").textContent="Rilevati in precedenza · "+shownPrevious.length;
+ $("device-history").replaceChildren(...shownPrevious.map(d=>deviceRow(d,false)));
 }
 function render(){
+ $("release").textContent="Versione "+S.release;
+ $("refresh").textContent=S.mode==="mock"?"Aggiorna simulazione":"Leggi dal Deco";
  if(S.ha_ingress && S.mode==="mock" && $("message").nextElementSibling!==$("deco-diagnostics"))$("message").after($("deco-diagnostics"));
  $("policy-panel").hidden=!!S.inventory_only;
  const flags=$("badges");flags.replaceChildren();add(flags,node("span",S.mode==="mock"?"SIMULAZIONE":"Deco "+S.router_ip,"flag "+(S.mode==="mock"?"warning":"")),node("span",S.writes_enabled?"COMANDI ATTIVI":"SOLA LETTURA","flag "+(S.writes_enabled?"warning":"safe")));
@@ -140,7 +158,11 @@ function history(items){const table=node("table"),head=node("tr");for(const x of
  for(const a of items){const row=node("tr"),name=S.devices.find(d=>d.mac===a.mac)?.name||a.mac;for(const x of [a.day,name,a.minutes+" min",speed(a.average_down_kbs),speed(a.max_down_kbs),speed(a.average_up_kbs),speed(a.max_up_kbs)])row.append(node("td",x));table.append(row)}$("history").replaceChildren(table)}
 $("add-user").onsubmit=e=>{e.preventDefault();const val=$("user-name").value.trim();if(val)execute("users",{name:val});$("user-name").value=""};
 $("add-window").onsubmit=e=>{e.preventDefault();execute("windows",{user_id:Number($("window-user").value),weekday:Number($("weekday").value),start_time:$("start").value,end_time:$("end").value})};
-$("refresh").onclick=()=>execute("refresh",{});
+$("refresh").onclick=async()=>{
+ const button=$("refresh");
+ button.disabled=true;
+ try{await execute("refresh",{})}finally{button.disabled=false}
+};
 $("device-filter").oninput=()=>{if(S.devices)renderDevices()};
 $("probe").onclick=()=>loadDiagnostics("POST");
 $("deco-probe-form").onsubmit=event=>{

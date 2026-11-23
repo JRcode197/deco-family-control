@@ -1,3 +1,9 @@
+## 0.2.1
+
+- Versione in esecuzione visibile sotto il titolo della dashboard.
+- Elenco dell'ultima lettura del Deco con orario, numero di dispositivi e stato online.
+- Dispositivi delle letture precedenti accessibili in una sezione separata, con le assegnazioni conservate.
+
 ## 0.2.0
 
 - Inventario reale Deco X50 in sola lettura, attivabile dalle opzioni amministratore di Home Assistant.

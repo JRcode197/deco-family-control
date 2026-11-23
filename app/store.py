@@ -70,11 +70,12 @@ class Store:
     def users(self) -> list[dict]:
         return self.query("SELECT * FROM users ORDER BY name")
 
-    def devices(self, sample_minute: str | None = None) -> list[dict]:
-        return self.query("""SELECT d.*, u.name AS user_name, s.up_kbs, s.down_kbs
+    def devices(self, sample_minute: str | None = None, *, snapshot_at: str | None = None) -> list[dict]:
+        return self.query("""SELECT d.*, u.name AS user_name, s.up_kbs, s.down_kbs,
+          CASE WHEN d.last_seen=? THEN 1 ELSE 0 END AS in_latest_snapshot
           FROM devices d LEFT JOIN users u ON u.id = d.user_id
           LEFT JOIN minute_samples s ON d.online=1 AND s.mac=d.mac AND s.minute=?
-          ORDER BY d.name""", (sample_minute,))
+          ORDER BY d.name""", (snapshot_at, sample_minute))
 
     def windows(self) -> list[dict]:
         return self.query("SELECT * FROM windows ORDER BY user_id, weekday, start_time")

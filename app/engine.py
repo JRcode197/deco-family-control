@@ -39,19 +39,21 @@ class Engine:
 
     def poll(self, now: datetime | None = None) -> dict:
         with self.lock:
-            now = now or datetime.now(ZoneInfo(self.settings.timezone))
             try:
                 clients = self.adapter.clients()
+                now = now or datetime.now(ZoneInfo(self.settings.timezone))
                 minute = now.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%MZ")
-                self.store.record_inventory(clients, now.isoformat(), local_day(now, self.settings.timezone), minute)
-                self.last_poll = now.isoformat()
-                self.last_sample_minute = minute
-                self.last_error = ""
+                with self.store.lock:
+                    self.store.record_inventory(clients, now.isoformat(), local_day(now, self.settings.timezone), minute)
+                    self.last_poll = now.isoformat()
+                    self.last_sample_minute = minute
+                    self.last_error = ""
                 actions = [] if self.settings.ha_ingress and self.settings.mode == "deco" else self.enforce(now)
                 return {"clients": len(clients), "actions": actions}
             except Exception:
-                self.last_error = "Interrogazione non riuscita. Controlla la diagnostica."
-                self.store.log("poll", "errore", detail=self.last_error)
+                with self.store.lock:
+                    self.last_error = "Interrogazione non riuscita. Controlla la diagnostica."
+                    self.store.log("poll", "errore", detail=self.last_error)
                 raise
 
     def enforce(self, now: datetime | None = None) -> list[dict]:

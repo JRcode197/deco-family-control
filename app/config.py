@@ -11,6 +11,15 @@ HA_DATABASE_PATH = "/data/inventory/family.sqlite3"
 PRIVATE_LAN_RANGES = tuple(IPv4Network(cidr) for cidr in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 
 
+def release_version() -> str:
+    manifest = Path(__file__).resolve().parents[1] / "config.yaml"
+    if manifest.is_file():
+        for line in manifest.read_text(encoding="utf-8").splitlines():
+            if line.startswith("version:"):
+                return line.split(":", 1)[1].strip().strip("\"'")
+    return "sviluppo"
+
+
 def private_router_ip(value: IPv4Address) -> IPv4Address:
     if not any(value in network for network in PRIVATE_LAN_RANGES):
         raise ValueError("Private LAN IPv4 address required")
