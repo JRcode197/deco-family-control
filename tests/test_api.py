@@ -106,3 +106,14 @@ def test_home_assistant_ingress_requires_supervisor_and_action_header(monkeypatc
         report = via_ha.post("/api/diagnostics", headers={"X-Family-Action": "1"})
         assert report.status_code == 200
         assert report.json()["inventory"]["status"] == "simulated"
+
+
+def test_deco_login_form_defaults_to_documented_local_api_user():
+    """Do not mislead users into entering a personal name as the Deco API username."""
+    from pathlib import Path
+
+    html = (Path(__file__).resolve().parents[1] / "app" / "static" / "index.html").read_text()
+    assert 'id="deco-username" value="admin"' in html
+    assert 'password.value=""' in html
+    assert "password del TP-Link ID" in html
+    assert "potrebbe esserci un problema di protocollo" in html
