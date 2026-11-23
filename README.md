@@ -50,6 +50,10 @@ On Home Assistant installations with the app store, add this repository, install
 
 ### Read-only diagnostics on the home LAN
 
+**Deco X50 block-list response:** the local firmware may encode an empty `black_list` as `{"client_list": {}}`, not `{"client_list": []}`. The diagnostic accepts **only an empty object** as an empty list, yielding `blocklist.status=read_only_detected` and `count=0`. Missing data or nonempty unexpected objects remain `read_error`. An empty list does **not** mean the app's block/unblock commands enforce Internet denial; that still requires a physical test.
+
+
+
 **Authentication note for Deco X50:** The local SDK uses a signed `md5(username + password)` handshake and its standard examples use `admin` as **API username**, even when the Deco browser login presents only a password field. Start with `admin` and the **owner TP-Link ID password**, not the person's name, Wi-Fi key, or dashboard password. First confirm the password works at the router's LAN web page. An `authentication_failed` status is not conclusive evidence that a password is wrong: an incompatible firmware protocol, a rejected session, or temporary lockout may produce a similar symptom. Avoid repeated attempts; if owner web login succeeds but API probing fails, report only the redacted JSON, X50 hardware revision and firmware. Do **not** put passwords, tokens, cookies or raw logs in GitHub. The probe never writes to the router.
 
 

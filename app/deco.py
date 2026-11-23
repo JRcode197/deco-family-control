@@ -146,7 +146,10 @@ class DecoSdkAdapter:
             raise DecoAccessError(status)
 
     @staticmethod
-    def _read_rows(deco, path: str, form: str, data: dict, key: str) -> list[dict]:
+    def _read_rows(
+        deco, path: str, form: str, data: dict, key: str,
+        *, empty_object_is_empty: bool = False,
+    ) -> list[dict]:
         from tplink_deco_api import TransportError
 
         try:
@@ -156,6 +159,10 @@ class DecoSdkAdapter:
                 raise DecoAccessError("not_supported") from None
             raise
         rows = result.get(key)
+        # The SDK documents {"client_list": {}} for an empty blacklist.
+        # Do not relax device-inventory parsing or accept arbitrary dictionaries.
+        if empty_object_is_empty and isinstance(rows, dict) and not rows:
+            return []
         if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
             raise DecoAccessError("read_error")
         return rows
@@ -224,8 +231,10 @@ class DecoSdkAdapter:
         report.firmware.status = "read_only_detected" if report.firmware_version else "not_reported"
 
     def _probe_blocklist(self, deco, report: Diagnostics):
-        rows = self._read_rows(deco, "admin/client", "black_list",
-                               {"operation": "list"}, "client_list")
+        rows = self._read_rows(
+            deco, "admin/client", "black_list", {"operation": "list"},
+            "client_list", empty_object_is_empty=True,
+        )
         report.blocklist.status = "read_only_detected"
         report.blocklist.count = len(rows)
 
