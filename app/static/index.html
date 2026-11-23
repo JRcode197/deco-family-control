@@ -28,12 +28,12 @@ form,.control{display:flex;flex-wrap:wrap;gap:8px}form{margin-bottom:12px}button
 <section class="panel" id="deco-diagnostics"><h2>Diagnostica Deco X50</h2>
 <form id="deco-probe-form" class="diagnostic-form" method="post" autocomplete="off">
 <label>Indirizzo IP del Deco<input id="deco-ip" placeholder="192.168.21.1" maxlength="15" inputmode="url" required></label>
-<label>Utente Deco<input id="deco-username" maxlength="254" autocapitalize="none" spellcheck="false" required></label>
+<label>Utente API locale (di solito admin)<input id="deco-username" value="admin" maxlength="254" autocapitalize="none" spellcheck="false" autocomplete="off" required></label>
 <label>Password Deco<input id="deco-password" type="password" maxlength="1024" autocomplete="new-password" required></label>
 <button id="probe-deco" type="submit">Esegui verifica in sola lettura</button>
 </form>
 <button class="subtle" id="probe" type="button">Usa configurazione del server</button>
-<p class="notice">Usa le credenziali dell'interfaccia web del Deco sulla rete di casa. I dati inseriti valgono solo per questa verifica. Puoi condividere il risultato JSON.</p>
+<p class="notice">Per la libreria API locale, prova <strong>admin</strong> come utente (non il nome personale). Usa la password del TP-Link ID <strong>proprietario</strong> del Deco: non quella del Wi-Fi né quella della dashboard. Verifica prima che la password funzioni nell'interfaccia web su 192.168.21.1. Non ripetere molti tentativi se il router rifiuta l'accesso. I dati valgono solo per questa prova; puoi condividere soltanto il risultato JSON.</p>
 <div id="diagnostic-summary" aria-live="polite"></div>
 <details><summary>Risultato JSON</summary><pre id="diagnostic-json" class="tablewrap"></pre></details>
 <p class="notice">Un blocco è verificato fisicamente solo dopo una prova di perdita e ripristino dell'accesso a Internet su un dispositivo di prova.</p></section>
@@ -56,7 +56,7 @@ const diagnosticLabels = {
  not_checked: "Da verificare", simulated: "Simulato", read_only_detected: "Rilevato in sola lettura",
  not_supported: "Non supportato", not_reported: "Dato non restituito", sdk_unavailable: "SDK non disponibile",
  temporary_error: "Errore temporaneo", read_error: "Risposta non utilizzabile",
- authentication_failed: "Accesso al Deco rifiutato. Controlla le credenziali.",
+ authentication_failed: "Accesso API locale rifiutato: verifica admin + password del TP-Link ID proprietario. Se la pagina web funziona, potrebbe esserci un problema di protocollo o sessione. Evita tentativi ripetuti.",
  not_verified: "Da verificare fisicamente"
 };
 async function loadDiagnostics(method="GET", credentials){
