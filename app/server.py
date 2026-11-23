@@ -26,7 +26,11 @@ def main() -> None:
 
     from app.main import create_app
 
-    uvicorn.run(create_app(settings), host="0.0.0.0", port=8080, server_header=False, proxy_headers=False)
+    # Report errors without logging request URLs that may include device identifiers.
+    uvicorn.run(
+        create_app(settings), host="0.0.0.0", port=8080, server_header=False,
+        proxy_headers=False, access_log=False,
+    )
 
 
 if __name__ == "__main__":
