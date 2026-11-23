@@ -107,7 +107,7 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
             raise HTTPException(403, "Missing anti-CSRF action header")
 
     async def periodic(stop: asyncio.Event):
-        while not stop.is_set():
+        while not stop.is_set() and not settings.inventory_setup_error:
             try:
                 await asyncio.to_thread(engine.poll)
             except Exception:
@@ -120,6 +120,10 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
     def policy_guard(_=Depends(mutation_guard)):
         if inventory_only:
             raise HTTPException(403, "L'inventario Home Assistant è in sola lettura sul Deco.")
+
+    def inventory_ready():
+        if settings.inventory_setup_error:
+            raise HTTPException(503, settings.inventory_setup_error, headers=NO_CACHE)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -149,13 +153,14 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
         day = datetime.now(ZoneInfo(settings.timezone)).date().isoformat()
         with store.lock:
             last_poll = engine.last_poll
-            last_error = engine.last_error
+            last_error = settings.inventory_setup_error or engine.last_error
             devices = store.devices(sample_minute=engine.last_sample_minute, snapshot_at=last_poll)
         return JSONResponse({
             "release": release,
             "mode": settings.mode,
             "ha_ingress": settings.ha_ingress,
             "inventory_only": inventory_only,
+            "inventory_setup_required": bool(settings.inventory_setup_error),
             "router_ip": settings.router_ip,
             "writes_enabled": settings.writes_enabled,
             "quota_enforcement": settings.quota_enforcement,
@@ -178,7 +183,7 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
             },
         }, headers=NO_CACHE)
 
-    @app.post("/api/refresh", dependencies=[Depends(mutation_guard)])
+    @app.post("/api/refresh", dependencies=[Depends(mutation_guard), Depends(inventory_ready)])
     async def refresh():
         try:
             return await asyncio.to_thread(engine.poll)
@@ -189,7 +194,7 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
     def diagnostics():
         return JSONResponse(asdict(engine.diagnostics), headers={"Cache-Control": "no-store"})
 
-    @app.post("/api/diagnostics", dependencies=[Depends(mutation_guard)])
+    @app.post("/api/diagnostics", dependencies=[Depends(mutation_guard), Depends(inventory_ready)])
     async def probe_diagnostics():
         return await run_diagnostics()
 

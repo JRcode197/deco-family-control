@@ -31,17 +31,37 @@ def set_ha_options(tmp_path, monkeypatch, **overrides):
     monkeypatch.setattr("app.config.HA_OPTIONS_PATH", options_path)
 
 
-@pytest.mark.parametrize("invalid", [
-    {"deco_ip": "https://192.168.42.2"},
-    {"deco_ip": "127.0.0.1"},
-    {"deco_password": ""},
-    {"deco_username": "  "},
+@pytest.mark.parametrize(("option", "invalid"), [
+    ("deco_ip", "https://192.168.42.2"),
+    ("deco_ip", "127.0.0.1"),
+    ("deco_password", ""),
+    ("deco_password", None),
+    ("deco_username", "  "),
 ])
-def test_enabled_inventory_requires_valid_local_options(tmp_path, monkeypatch, invalid):
-    set_ha_options(tmp_path, monkeypatch, **invalid)
-    with pytest.raises(ValueError) as failure:
-        from_env()
-    assert FIXTURE_SECRET not in str(failure.value)
+def test_enabled_inventory_waits_for_valid_local_options(tmp_path, monkeypatch, option, invalid):
+    set_ha_options(tmp_path, monkeypatch, **{option: invalid})
+    settings = replace(from_env(), database_path=str(tmp_path / "pending.sqlite3"))
+    assert option in settings.inventory_setup_error
+    assert FIXTURE_SECRET not in settings.inventory_setup_error
+    assert not settings.writes_enabled
+
+    class DisabledInventory:
+        def clients(self):
+            pytest.fail("Incomplete options must prevent polling")
+
+        def diagnostics(self):
+            pytest.fail("Incomplete options must prevent diagnostics with the server configuration")
+
+    with TestClient(create_app(settings, adapter=DisabledInventory()), client=(SUPERVISOR_IP, 9000)) as client:
+        assert client.get("/").status_code == 200
+        response = client.get("/api/state")
+        state = response.json()
+        assert state["mode"] == "deco" and state["inventory_setup_required"]
+        assert state["devices"] == [] and state["last_poll"] is None
+        assert option in state["last_error"] and FIXTURE_SECRET not in response.text
+        for path in ("/api/refresh", "/api/diagnostics"):
+            response = client.post(path, headers=ACTION)
+            assert response.status_code == 503 and option in response.json()["detail"]
 
 
 def test_home_assistant_inventory_assignment_and_history_persist(tmp_path, monkeypatch):
@@ -79,6 +99,7 @@ def test_home_assistant_inventory_assignment_and_history_persist(tmp_path, monke
         assert client.post("/api/refresh", headers=ACTION).status_code == 200
         state = client.get("/api/state")
         assert state.headers["cache-control"] == "no-store"
+        assert not state.json()["inventory_setup_required"]
         manifest = Path(__file__).resolve().parents[1] / "config.yaml"
         assert re.search(r'^version: "([^"]+)"$', manifest.read_text(), re.M)[1] == state.json()["release"]
         [device] = state.json()["devices"]

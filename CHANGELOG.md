@@ -1,3 +1,8 @@
+## 0.2.2
+
+- Campo password visibile nella configurazione di Home Assistant fin dalla prima apertura.
+- La dashboard resta disponibile e segnala quale campo manca se l'inventario è attivo con una configurazione incompleta.
+
 ## 0.2.1
 
 - Versione in esecuzione visibile sotto il titolo della dashboard.

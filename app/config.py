@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from ipaddress import IPv4Address, IPv4Network
 import json
 from os import environ
@@ -44,6 +44,7 @@ class Settings:
     ha_token: str = field(default="", repr=False)
     protected_macs: tuple[str, ...] = ()
     ha_ingress: bool = False
+    inventory_setup_error: str = ""
 
 
 def ha_settings() -> Settings:
@@ -58,19 +59,19 @@ def ha_settings() -> Settings:
     if options.get("inventory_enabled") is not True:
         return Settings(ha_ingress=True, database_path=":memory:")
 
-    ip = options.get("deco_ip", "192.168.21.1")
-    username = options.get("deco_username", "admin")
+    settings = Settings(mode="deco", ha_ingress=True, database_path=HA_DATABASE_PATH)
+    ip = options.get("deco_ip", settings.router_ip)
+    username = options.get("deco_username", settings.router_user)
     password = options.get("deco_password")
     try:
         router_ip = str(private_router_ip(IPv4Address(ip.strip())))
     except (AttributeError, ValueError):
-        raise ValueError("Imposta un IPv4 privato del Deco nelle opzioni Home Assistant.") from None
-    if not isinstance(username, str) or not username.strip() or not isinstance(password, str) or not password:
-        raise ValueError("Imposta l'utente API e la password del Deco nelle opzioni Home Assistant.")
-    return Settings(
-        mode="deco", ha_ingress=True, database_path=HA_DATABASE_PATH,
-        router_ip=router_ip, router_user=username.strip(), router_password=password,
-    )
+        return replace(settings, inventory_setup_error="Inserisci un IPv4 privato del Deco in deco_ip.")
+    if not isinstance(username, str) or not username.strip():
+        return replace(settings, inventory_setup_error="Compila deco_username con l'utente API del Deco.")
+    if not isinstance(password, str) or not password:
+        return replace(settings, inventory_setup_error="Compila deco_password con la password usata nella diagnostica.")
+    return replace(settings, router_ip=router_ip, router_user=username.strip(), router_password=password)
 
 
 def from_env() -> Settings:

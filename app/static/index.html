@@ -91,7 +91,7 @@ async function loadDiagnostics(method="GET", credentials){
   if(report.checked_at)summary.append(node("p","Ultima verifica: "+new Date(report.checked_at).toLocaleString()+" · Al massimo una verifica al minuto.","notice"));
   $("diagnostic-json").textContent=JSON.stringify(report,null,2);
  }catch(e){summary.textContent=e.message}
- finally{for(const button of buttons)button.disabled=false}
+ finally{for(const button of buttons)button.disabled=button.id==="probe"&&!!S.inventory_setup_required}
 }
 const actionLabel = status => ["inviato_non_verificato","accettato_da_ha_non_verificato"].includes(status)
  ? "Comando accettato (da verificare)" : status;
@@ -127,6 +127,7 @@ function renderDevices(){
  $("inventory-status").textContent=[
   current?"Ultima lettura "+time+" · "+count+" dispositivi · "+online+" online":S.last_error||"In attesa della prima lettura.",
   !current&&time?"Ultima lettura riuscita "+time:"",
+  S.inventory_setup_required?"Apri la scheda Configurazione di Deco Family Control in Home Assistant, poi salva e riavvia.":"",
   S.ha_ingress&&S.mode==="mock"?"Per leggere il Deco, attiva l’inventario reale nella configurazione dell’app in Home Assistant.":""
  ].filter(Boolean).join(" · ");
  $("devices").replaceChildren(...shownLatest.map(d=>deviceRow(d,true)));
@@ -139,9 +140,12 @@ function renderDevices(){
 function render(){
  $("release").textContent="Versione "+S.release;
  $("refresh").textContent=S.mode==="mock"?"Aggiorna simulazione":"Leggi dal Deco";
+ if(S.inventory_setup_required){$("refresh").disabled=true;$("probe").disabled=true}
  if(S.ha_ingress && S.mode==="mock" && $("message").nextElementSibling!==$("deco-diagnostics"))$("message").after($("deco-diagnostics"));
  $("policy-panel").hidden=!!S.inventory_only;
- const flags=$("badges");flags.replaceChildren();add(flags,node("span",S.mode==="mock"?"SIMULAZIONE":"Deco "+S.router_ip,"flag "+(S.mode==="mock"?"warning":"")),node("span",S.writes_enabled?"COMANDI ATTIVI":"SOLA LETTURA","flag "+(S.writes_enabled?"warning":"safe")));
+ const flags=$("badges");flags.replaceChildren();
+ if(S.inventory_setup_required)flags.append(node("span","CONFIGURAZIONE RICHIESTA","flag warning"));
+ else add(flags,node("span",S.mode==="mock"?"SIMULAZIONE":"Deco "+S.router_ip,"flag "+(S.mode==="mock"?"warning":"")),node("span",S.writes_enabled?"COMANDI ATTIVI":"SOLA LETTURA","flag "+(S.writes_enabled?"warning":"safe")));
  const users=$("users");users.replaceChildren();for(const u of S.users){const row=node("div",undefined,"item"),left=node("div"),c=node("div",undefined,"control");add(left,node("strong",u.name),node("small",S.devices.filter(d=>d.user_id===u.id).length+" dispositivi"));
  if(!S.inventory_only){
   add(c,btn(u.manually_blocked?"Sblocca":"Blocca ora",()=>execute("manual-block",{user_id:u.id,blocked:!u.manually_blocked}),u.manually_blocked?"subtle":"danger"));

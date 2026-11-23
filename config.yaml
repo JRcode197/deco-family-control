@@ -1,6 +1,6 @@
 name: Deco Family Control
 description: Inventario Deco X50 in sola lettura e profili famiglia.
-version: "0.2.1"
+version: "0.2.2"
 slug: deco_family_control
 url: https://github.com/JRcode197/deco-family-control
 arch:
@@ -18,6 +18,7 @@ options:
   inventory_enabled: false
   deco_ip: "192.168.21.1"
   deco_username: "admin"
+  deco_password: ""
 schema:
   inventory_enabled: bool
   deco_ip: str
