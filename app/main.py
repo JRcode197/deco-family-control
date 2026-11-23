@@ -24,6 +24,7 @@ from app.store import Store
 
 log = logging.getLogger(__name__)
 security = HTTPBasic()
+SUPERVISOR_IP = "172.30.32.2"
 PRIVATE_LAN_RANGES = tuple(IPv4Network(cidr) for cidr in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 
 
@@ -83,13 +84,20 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
                           DecoSdkAdapter(settings.router_ip, settings.router_user, settings.router_password))
     engine = Engine(store, adapter, settings)
 
-    def authenticate(credentials: HTTPBasicCredentials = Depends(security)):
+    def admin_authenticate(credentials: HTTPBasicCredentials = Depends(security)):
         valid_user = hmac.compare_digest(credentials.username.encode(), settings.admin_user.encode())
         valid_password = hmac.compare_digest(credentials.password.encode(), settings.admin_password.encode())
         if not (valid_user and valid_password):
             raise HTTPException(status_code=401, detail="Credenziali non valide",
                                 headers={"WWW-Authenticate": "Basic"})
         return credentials.username
+
+    def supervisor_authenticate(request: Request):
+        # Uvicorn uses the TCP peer address because proxy headers are disabled.
+        if request.client is None or request.client.host != SUPERVISOR_IP:
+            raise HTTPException(403, "Apri l'app da Home Assistant.")
+
+    authenticate = supervisor_authenticate if settings.ha_ingress else admin_authenticate
 
     def mutation_guard(x_family_action: str | None = Header(None),
                        _=Depends(authenticate)):
@@ -121,7 +129,8 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
             finally:
                 store.close()
 
-    app = FastAPI(title="Deco Family Control", lifespan=lifespan, docs_url=None, redoc_url=None)
+    app = FastAPI(title="Deco Family Control", lifespan=lifespan, docs_url=None, redoc_url=None,
+                  openapi_url=None if settings.ha_ingress else "/openapi.json")
     app.state.engine = engine
     app.state.store = store
 
@@ -135,6 +144,7 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
         day = datetime.now(ZoneInfo(settings.timezone)).date().isoformat()
         return {
             "mode": settings.mode,
+            "ha_ingress": settings.ha_ingress,
             "router_ip": settings.router_ip,
             "writes_enabled": settings.writes_enabled,
             "quota_enforcement": settings.quota_enforcement,

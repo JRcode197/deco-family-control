@@ -44,6 +44,10 @@ Sign in with `ADMIN_USER` / `ADMIN_PASSWORD`. Add Alice and Anna, assign mock de
 
 ## Staged, real-network X50 verification
 
+### Home Assistant
+
+On Home Assistant installations with the app store, add this repository, install **Deco Family Control**, and select **Start → Open web UI**. Home Assistant Ingress handles access, including from the iPhone companion app. The Deco connection details are entered in the diagnostic form for one read-only check. See [the Home Assistant instructions](DOCS.md).
+
 ### Read-only diagnostics on the home LAN
 
 1. On a machine connected to the home LAN, start the app using the Quickstart above. Keep `DECO_MODE=mock` and `DECO_WRITE_ENABLED=false` for this one-off check. The `.env` file only needs the usual dashboard login settings and defaults.

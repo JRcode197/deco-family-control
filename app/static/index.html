@@ -25,7 +25,7 @@ form,.control{display:flex;flex-wrap:wrap;gap:8px}form{margin-bottom:12px}button
 <section class="panel"><h2>Riepilogo utilizzo</h2><p class="notice">I minuti misurano la presenza online osservata durante il polling Wi-Fi, non il tempo-schermo o il tempo effettivo di navigazione.</p><div id="usage"></div><h3>Ultimi 7 giorni</h3><div id="history" class="tablewrap"></div></section>
 </div>
 <section class="panel"><h2>Registro delle operazioni</h2><div id="audit" class="tablewrap"></div></section>
-<section class="panel"><h2>Diagnostica Deco X50</h2>
+<section class="panel" id="deco-diagnostics"><h2>Diagnostica Deco X50</h2>
 <form id="deco-probe-form" class="diagnostic-form" method="post" autocomplete="off">
 <label>Indirizzo IP del Deco<input id="deco-ip" placeholder="192.168.21.1" maxlength="15" inputmode="url" required></label>
 <label>Utente Deco<input id="deco-username" maxlength="254" autocapitalize="none" spellcheck="false" required></label>
@@ -48,7 +48,7 @@ function add(parent,...children){for(const c of children)parent.appendChild(c)}
 function btn(label,click,cls){const e=node("button",label,cls||"subtle");e.type="button";e.onclick=click;return e}
 function drop(options,value,click){const e=node("select");for(const o of options){const x=node("option",o.label);x.value=o.value;e.appendChild(x)}e.value=value===null?"":String(value);e.onchange=()=>click(e.value);return e}
 async function api(path,method="GET",data){const o={method,headers:{"X-Family-Action":"1"}};if(data!==undefined){o.headers["Content-Type"]="application/json";o.body=JSON.stringify(data)}
- const r=await fetch("/api/"+path,o);let v;try{v=await r.json()}catch{v={detail:"Risposta non valida"}}if(!r.ok)throw Error(v.detail||"HTTP "+r.status);return v}
+ const r=await fetch("api/"+path,o);let v;try{v=await r.json()}catch{v={detail:"Risposta non valida"}}if(!r.ok)throw Error(v.detail||"HTTP "+r.status);return v}
 function msg(text,err){$("message").textContent=text;$("message").className=err?"error":"success"}
 async function execute(path,data,method="POST"){try{const v=await api(path,method,data);const errs=(v.actions||[]).filter(a=>a.status==="errore");msg(errs.length?"Comando fallito: consulta il registro":"Operazione registrata. Verifica i blocchi sulla rete.",!!errs.length);await refresh()}catch(e){msg(e.message,true)}}
 async function refresh(){try{S=await api("state");render();const h=await api("usage?days=7");history(h.data)}catch(e){msg(e.message,true)}}
@@ -87,6 +87,7 @@ async function loadDiagnostics(method="GET", credentials){
 const actionLabel = status => ["inviato_non_verificato","accettato_da_ha_non_verificato"].includes(status)
  ? "Comando accettato (da verificare)" : status;
 function render(){
+ if(S.ha_ingress && $("message").nextElementSibling!==$("deco-diagnostics"))$("message").after($("deco-diagnostics"));
  const flags=$("badges");flags.replaceChildren();add(flags,node("span",S.mode==="mock"?"SIMULAZIONE":"Deco "+S.router_ip,"flag "+(S.mode==="mock"?"warning":"")),node("span",S.writes_enabled?"COMANDI ATTIVI":"SOLA LETTURA","flag "+(S.writes_enabled?"warning":"safe")),node("span",S.quota_enforcement?"Quote attive":"Quote spente","flag"));if(S.last_error)msg(S.last_error,true);
  const users=$("users");users.replaceChildren();for(const u of S.users){const row=node("div",undefined,"item"),left=node("div"),c=node("div",undefined,"control");add(left,node("strong",u.name),node("small",S.devices.filter(d=>d.user_id===u.id).length+" dispositivi"));
  add(c,btn(u.manually_blocked?"Sblocca":"Blocca ora",()=>execute("manual-block",{user_id:u.id,blocked:!u.manually_blocked}),u.manually_blocked?"subtle":"danger"));

@@ -1,0 +1,14 @@
+name: Deco Family Control
+description: Diagnostica Deco X50 in sola lettura e simulazione delle regole.
+version: "0.1.0"
+slug: deco_family_control
+url: https://github.com/JRcode197/deco-family-control
+arch:
+  - amd64
+  - aarch64
+boot: manual
+ingress: true
+ingress_port: 8080
+panel_icon: mdi:router-wireless
+environment:
+  DECO_HA_INGRESS: "true"

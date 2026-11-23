@@ -20,11 +20,15 @@ class Settings:
     ha_url: str = ""
     ha_token: str = field(default="", repr=False)
     protected_macs: tuple[str, ...] = ()
+    ha_ingress: bool = False
 
 
 def from_env() -> Settings:
     def enabled(name: str) -> bool:
         return environ.get(name, "false").lower() == "true"
+
+    if enabled("DECO_HA_INGRESS"):
+        return Settings(ha_ingress=True, database_path=":memory:")
 
     values = Settings(
         mode=environ.get("DECO_MODE", "mock"),
