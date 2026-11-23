@@ -114,6 +114,29 @@ def test_unsupported_read_and_empty_list_are_distinct(fake_deco, sdk):
     assert report.speed_samples == "not_reported"
 
 
+@pytest.mark.parametrize("payload, expected_status, expected_count", [
+    ({"client_list": {}}, "read_only_detected", 0),
+    ({"client_list": []}, "read_only_detected", 0),
+    ({"client_list": {"unrecognized": "shape"}}, "read_error", None),
+    ({}, "read_error", None),
+])
+def test_blacklist_empty_object_and_malformed_responses_are_distinct(
+    fake_deco, payload, expected_status, expected_count
+):
+    adapter, session = fake_deco
+    session.responses["black_list"] = payload
+
+    report = adapter.diagnostics()
+
+    assert report.connection == "read_only_detected"
+    assert report.inventory.count == 1
+    assert report.firmware.status == "read_only_detected"
+    assert report.blocklist.status == expected_status
+    assert report.blocklist.count == expected_count
+    assert session.calls == READS
+    assert report.enforcement == "not_verified"
+
+
 def test_hostile_firmware_content_and_missing_speeds(fake_deco):
     adapter, session = fake_deco
     gateway = session.responses["device_list"]["device_list"][1]
