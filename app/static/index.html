@@ -7,6 +7,7 @@
 main{max-width:1050px;margin:auto;padding:18px;display:grid;gap:14px}.cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 .panel{min-width:0;padding:18px;background:#1b2832;border:1px solid #354955;border-radius:16px}.item{padding:12px 0;border-top:1px solid #354955;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}.item:first-child{border:0}.item small{display:block;color:#b7c5cd}
 form,.control{display:flex;flex-wrap:wrap;gap:8px}form{margin-bottom:12px}button,input,select{font:inherit;padding:10px;border-radius:9px;border:1px solid #526776;background:#263944;color:white;max-width:100%;min-width:0}input{width:135px}button{background:#087f95;cursor:pointer}button.danger{background:#a34149;border-color:#b85b61}button.subtle{background:#29404f}button:disabled{opacity:.5}label{font-size:.84rem}.flag{display:inline-block;border-radius:99px;padding:5px 10px;margin:6px 8px 0 0;background:#354c5c;font-size:.83rem}.safe{background:#174d41;color:#a3e9cb}.warning{background:#573724;color:#ffe0b2}.notice{font-size:.88rem;line-height:1.5;color:#bed0d9}.error{color:#ffaaaa}.success{color:#9de6c7}#message{min-height:24px;margin:0}table{width:100%;border-collapse:collapse;font-size:.83rem}td,th{border-bottom:1px solid #314452;padding:8px;text-align:left}a{color:#7ad7e9}.tablewrap{overflow-x:auto}
+.diagnostic-form{align-items:end;gap:12px}.diagnostic-form label{display:grid;gap:4px}.diagnostic-form input{width:185px}
 @media(max-width:740px){.cols{grid-template-columns:1fr}header{padding:18px}.panel{padding:14px}}
 </style></head><body>
 <header><h1>🛡 Deco Family Control</h1><p>TP-Link Deco X50 · controllo parentale locale</p><div id="badges"></div></header>
@@ -25,8 +26,14 @@ form,.control{display:flex;flex-wrap:wrap;gap:8px}form{margin-bottom:12px}button
 </div>
 <section class="panel"><h2>Registro delle operazioni</h2><div id="audit" class="tablewrap"></div></section>
 <section class="panel"><h2>Diagnostica Deco X50</h2>
-<button class="subtle" id="probe" type="button">Esegui verifica in sola lettura</button>
-<p class="notice">La verifica legge inventario, firmware e lista blocchi. Puoi copiare il JSON per condividere il risultato.</p>
+<form id="deco-probe-form" class="diagnostic-form" method="post" autocomplete="off">
+<label>Indirizzo IP del Deco<input id="deco-ip" placeholder="192.168.21.1" maxlength="15" inputmode="url" required></label>
+<label>Utente Deco<input id="deco-username" maxlength="254" autocapitalize="none" spellcheck="false" required></label>
+<label>Password Deco<input id="deco-password" type="password" maxlength="1024" autocomplete="new-password" required></label>
+<button id="probe-deco" type="submit">Esegui verifica in sola lettura</button>
+</form>
+<button class="subtle" id="probe" type="button">Usa configurazione del server</button>
+<p class="notice">Usa le credenziali dell'interfaccia web del Deco sulla rete di casa. I dati inseriti valgono solo per questa verifica. Puoi condividere il risultato JSON.</p>
 <div id="diagnostic-summary" aria-live="polite"></div>
 <details><summary>Risultato JSON</summary><pre id="diagnostic-json" class="tablewrap"></pre></details>
 <p class="notice">Un blocco è verificato fisicamente solo dopo una prova di perdita e ripristino dell'accesso a Internet su un dispositivo di prova.</p></section>
@@ -49,15 +56,18 @@ const diagnosticLabels = {
  not_checked: "Da verificare", simulated: "Simulato", read_only_detected: "Rilevato in sola lettura",
  not_supported: "Non supportato", not_reported: "Dato non restituito", sdk_unavailable: "SDK non disponibile",
  temporary_error: "Errore temporaneo", read_error: "Risposta non utilizzabile",
- authentication_failed: "Accesso al Deco rifiutato. Controlla le credenziali e riavvia.",
+ authentication_failed: "Accesso al Deco rifiutato. Controlla le credenziali.",
  not_verified: "Da verificare fisicamente"
 };
-async function loadDiagnostics(method="GET"){
- const button=$("probe"), summary=$("diagnostic-summary");
- button.disabled=true;
- if(method==="POST")summary.textContent="Verifica in corso…";
+async function loadDiagnostics(method="GET", credentials){
+ const buttons=[$("probe"),$("probe-deco")], summary=$("diagnostic-summary");
+ for(const button of buttons)button.disabled=true;
+ if(method==="POST"){
+  summary.textContent="Verifica in corso…";
+  $("diagnostic-json").textContent="";
+ }
  try{
-  const report=await api("diagnostics",method);
+  const report=await api(credentials?"diagnostics/deco":"diagnostics",method,credentials);
   const rows=[
    ["Sessione Deco", diagnosticLabels[report.connection]],
    ["Inventario", diagnosticLabels[report.inventory.status]+(report.inventory.count===null?"":" · "+report.inventory.count+" dispositivi")],
@@ -72,7 +82,7 @@ async function loadDiagnostics(method="GET"){
   if(report.checked_at)summary.append(node("p","Ultima verifica: "+new Date(report.checked_at).toLocaleString()+" · Al massimo una verifica al minuto.","notice"));
   $("diagnostic-json").textContent=JSON.stringify(report,null,2);
  }catch(e){summary.textContent=e.message}
- finally{button.disabled=false}
+ finally{for(const button of buttons)button.disabled=false}
 }
 const actionLabel = status => ["inviato_non_verificato","accettato_da_ha_non_verificato"].includes(status)
  ? "Comando accettato (da verificare)" : status;
@@ -96,5 +106,12 @@ $("add-user").onsubmit=e=>{e.preventDefault();const val=$("user-name").value.tri
 $("add-window").onsubmit=e=>{e.preventDefault();execute("windows",{user_id:Number($("window-user").value),weekday:Number($("weekday").value),start_time:$("start").value,end_time:$("end").value})};
 $("refresh").onclick=()=>execute("refresh",{});
 $("probe").onclick=()=>loadDiagnostics("POST");
+$("deco-probe-form").onsubmit=event=>{
+ event.preventDefault();
+ const password=$("deco-password");
+ const credentials={router_ip:$("deco-ip").value.trim(),username:$("deco-username").value,password:password.value};
+ password.value="";
+ loadDiagnostics("POST", credentials);
+};
 refresh();loadDiagnostics();setInterval(refresh,30000);
 </script></body></html>

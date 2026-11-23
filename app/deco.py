@@ -83,17 +83,25 @@ class MockAdapter:
 
 class DecoSdkAdapter:
     """Real local API with separate short admin sessions."""
-    def __init__(self, host: str, username: str, password: str) -> None:
+    def __init__(self, host: str, username: str, password: str, *, direct: bool = False) -> None:
         self.host = host
         self.username = username
         self.password = password
+        self.direct = direct
         self._session_lock = Lock()
         self._retry_at = 0.0
         self._last_failure = ""
 
     def _connect(self):
         from tplink_deco_api import DecoClient
-        return DecoClient(self.host, self.username, self.password)
+
+        deco = DecoClient(self.host, self.username, self.password)
+        if self.direct:
+            from app.deco_transport import DirectDecoTransport
+
+            # SDK 2.2.0 creates its own transport and has no public injection hook.
+            deco._transport = DirectDecoTransport()
+        return deco
 
     @contextmanager
     def _session(self):

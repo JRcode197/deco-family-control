@@ -2,29 +2,46 @@
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import datetime
+from ipaddress import IPv4Address, IPv4Network
 from pathlib import Path
+from typing import Annotated
 from zoneinfo import ZoneInfo
 import asyncio
 import hmac
 import logging
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Header
+from fastapi import Depends, FastAPI, HTTPException, Query, Header, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, SecretStr, StringConstraints, field_validator
 
 from app.config import Settings, from_env
-from app.deco import MockAdapter, DecoSdkAdapter, normalize_mac
+from app.deco import Adapter, MockAdapter, DecoSdkAdapter, normalize_mac
+from app.diagnostics import PROBE_INTERVAL_SECONDS, ProbeCooldown
 from app.engine import Engine
 from app.policy import to_minutes
 from app.store import Store
 
 log = logging.getLogger(__name__)
 security = HTTPBasic()
+PRIVATE_LAN_RANGES = tuple(IPv4Network(cidr) for cidr in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 
 
 class NewUser(BaseModel):
     name: str = Field(min_length=1, max_length=60)
+
+
+class DecoProbeCredentials(BaseModel):
+    router_ip: IPv4Address
+    username: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=254)] = Field(repr=False)
+    password: SecretStr = Field(min_length=1, max_length=1024)
+
+    @field_validator("router_ip")
+    @classmethod
+    def private_address(cls, value: IPv4Address) -> IPv4Address:
+        if not any(value in network for network in PRIVATE_LAN_RANGES):
+            raise ValueError("Private LAN IPv4 address required")
+        return value
 
 
 class Assignment(BaseModel):
@@ -152,8 +169,30 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
         return JSONResponse(asdict(engine.diagnostics), headers={"Cache-Control": "no-store"})
 
     @app.post("/api/diagnostics", dependencies=[Depends(mutation_guard)])
-    def probe_diagnostics():
-        report = engine.probe_diagnostics()
+    async def probe_diagnostics():
+        return await run_diagnostics()
+
+    @app.post("/api/diagnostics/deco", dependencies=[Depends(mutation_guard)])
+    async def probe_local_deco(request: Request):
+        try:
+            credentials = DecoProbeCredentials.model_validate_json(await request.body())
+        except ValueError:
+            # The default validation response can echo the submitted payload.
+            raise HTTPException(422, "Inserisci un IPv4 privato, il nome utente e la password del Deco.") from None
+        probe_adapter = DecoSdkAdapter(
+            str(credentials.router_ip), credentials.username,
+            credentials.password.get_secret_value(), direct=True,
+        )
+        return await run_diagnostics(probe_adapter)
+
+    async def run_diagnostics(probe_adapter: Adapter | None = None):
+        try:
+            report = await asyncio.to_thread(engine.probe_diagnostics, probe_adapter)
+        except ProbeCooldown:
+            raise HTTPException(
+                429, "Attendi un minuto tra una verifica e l'altra.",
+                headers={"Retry-After": str(PROBE_INTERVAL_SECONDS), "Cache-Control": "no-store"},
+            ) from None
         return JSONResponse(asdict(report), headers={"Cache-Control": "no-store"})
 
     @app.post("/api/users", dependencies=[Depends(mutation_guard)])

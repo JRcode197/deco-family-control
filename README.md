@@ -46,11 +46,13 @@ Sign in with `ADMIN_USER` / `ADMIN_PASSWORD`. Add Alice and Anna, assign mock de
 
 ### Read-only diagnostics on the home LAN
 
-1. On a machine connected directly to the home LAN, edit the ignored `.env`. Set `DECO_MODE=deco`, `DECO_ROUTER_IP=192.168.21.1`, `DECO_USERNAME` and `DECO_PASSWORD` to the local web login details. Keep `DECO_WRITE_ENABLED=false` and `QUOTA_ENFORCEMENT=false`. Start or recreate the service with `docker compose up --build -d`.
-2. Sign in to the local dashboard and select **Diagnostica Deco X50 → Esegui verifica in sola lettura**. The probe uses one session to check client inventory, gateway firmware, and blocklist readability. An empty list counts as a successful read. A response missing its expected list is marked unusable. An explicitly unavailable endpoint is marked unsupported.
+1. On a machine connected to the home LAN, start the app using the Quickstart above. Keep `DECO_MODE=mock` and `DECO_WRITE_ENABLED=false` for this one-off check. The `.env` file only needs the usual dashboard login settings and defaults.
+2. Sign in to the local dashboard. In **Diagnostica Deco X50**, enter the Deco's private IPv4 address, username and password for its web interface. Choose **Esegui verifica in sola lettura**. The probe uses those details for one session covering the client inventory, gateway firmware, and blocklist. The password field clears on submission. The app retains only the redacted report in memory.
 3. Open **Risultato JSON** and return that JSON in the issue or PR, along with the hardware revision from the Deco app if known. The report contains statuses, counts, and recognized firmware metadata. Share only that report and the requested metadata. `/api/state`, screenshots and database exports can contain household device identifiers.
 
-The authenticated `GET /api/diagnostics` returns the latest report from memory. The dashboard's authenticated `POST /api/diagnostics` requires `X-Family-Action: 1` and runs at most once per minute. A temporary SDK failure pauses router requests for 60 seconds. After an authentication failure, correct the local credentials and recreate the service to retry. The pinned SDK uses the router's HTTPS endpoint with certificate verification disabled in its transport. Run the real integration on a trusted home LAN.
+The authenticated `GET /api/diagnostics` returns the latest report from memory. The manual check uses `POST /api/diagnostics/deco` with a JSON body containing `router_ip`, `username` and `password`. It requires `X-Family-Action: 1`. After a failed check, you can correct the form and submit again after one minute. Manual diagnostics connect directly to the selected IPv4 address and reject redirects. The pinned SDK uses HTTPS with certificate verification disabled for the router. Run the check on a trusted home LAN.
+
+For continuous local polling, set `DECO_MODE=deco`, `DECO_ROUTER_IP`, `DECO_USERNAME` and `DECO_PASSWORD` in the ignored `.env` and recreate the service. **Usa configurazione del server** runs the probe using that configuration. After a rejected login in this mode, correct the configuration and recreate the service.
 
 ### Separate physical block/unblock test
 

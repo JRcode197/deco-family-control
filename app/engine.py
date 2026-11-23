@@ -4,8 +4,8 @@ import logging
 from threading import RLock
 from time import monotonic
 from zoneinfo import ZoneInfo
-from app.deco import Client, HomeAssistantGuardActuator
-from app.diagnostics import Diagnostics, PROBE_INTERVAL_SECONDS
+from app.deco import Adapter, Client, HomeAssistantGuardActuator
+from app.diagnostics import Diagnostics, PROBE_INTERVAL_SECONDS, ProbeCooldown
 from app.policy import local_day, policy_reason, schedule_active
 
 log = logging.getLogger(__name__)
@@ -21,15 +21,20 @@ class Engine:
         self.last_error = ""
         self.diagnostics = Diagnostics(mode=settings.mode)
         self._next_probe = 0.0
+        self._last_probe_used_server_settings = True
 
-    def probe_diagnostics(self) -> Diagnostics:
+    def probe_diagnostics(self, adapter: Adapter | None = None) -> Diagnostics:
         with self.lock:
-            if monotonic() >= self._next_probe:
-                report = self.adapter.diagnostics()
-                report.checked_at = datetime.now(ZoneInfo("UTC")).isoformat(timespec="seconds")
-                self.diagnostics = report
-                self._next_probe = monotonic() + PROBE_INTERVAL_SECONDS
-            return self.diagnostics
+            if monotonic() < self._next_probe:
+                if adapter is None and self._last_probe_used_server_settings:
+                    return self.diagnostics
+                raise ProbeCooldown
+            report = (self.adapter if adapter is None else adapter).diagnostics()
+            report.checked_at = datetime.now(ZoneInfo("UTC")).isoformat(timespec="seconds")
+            self.diagnostics = report
+            self._last_probe_used_server_settings = adapter is None
+            self._next_probe = monotonic() + PROBE_INTERVAL_SECONDS
+            return report
 
     def poll(self, now: datetime | None = None) -> dict:
         with self.lock:

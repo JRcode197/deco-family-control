@@ -27,3 +27,7 @@ class Diagnostics:
 
 class DecoAccessError(Exception):
     """A safe status independent of the SDK's exception text and request URL."""
+
+
+class ProbeCooldown(Exception):
+    """The last probe is too recent to start another session."""
