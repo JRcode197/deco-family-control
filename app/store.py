@@ -39,6 +39,23 @@ CREATE TABLE IF NOT EXISTS weekly_quotas (
   minutes INTEGER NOT NULL CHECK(minutes BETWEEN 1 AND 1440),
   PRIMARY KEY (user_id, weekday)
 );
+CREATE TABLE IF NOT EXISTS dns_profiles (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  group_name TEXT NOT NULL,
+  data TEXT NOT NULL,
+  PRIMARY KEY (user_id,group_name)
+);
+CREATE TABLE IF NOT EXISTS dns_devices (
+  mac TEXT PRIMARY KEY REFERENCES devices(mac) ON DELETE CASCADE,
+  client_name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+  data TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS dns_categories (
+  name TEXT PRIMARY KEY,
+  source TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  domains TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS schedule_copies (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

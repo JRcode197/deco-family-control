@@ -2,7 +2,10 @@
 
 const $ = id => document.getElementById(id);
 const days = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato", "Domenica"];
-const groupNames = {offtime: "Offtime", bedtime: "Bedtime", quotas: "Quote per giorno"};
+const groupNames = {
+  offtime: "Offtime", bedtime: "Bedtime", quotas: "Quote per giorno",
+  web: "Protezione contenuti", services: "Servizi e applicazioni"
+};
 const reasons = {
   manuale: "Blocco manuale", manuale_dispositivo: "Blocco del dispositivo",
   offtime: "Offtime", bedtime: "Bedtime"
@@ -128,6 +131,11 @@ function deviceRow(device, user = null) {
   const identity = add(node("div"), node("strong", device.name),
     node("small", [types[device.client_type] || device.client_type, device.ip, device.mac, availability].filter(Boolean).join(" · ")));
   if (device.last_online) identity.append(node("small", "Ultima presenza online " + clock(device.last_online)));
+  if (user && !protectedDevice) {
+    const preview = node("small");
+    preview.dataset.previewMac = device.mac;
+    identity.append(preview);
+  }
   if (fresh && (device.down_kbs !== null || device.up_kbs !== null)) {
     identity.append(node("small", "Ultimo campione ↓ " + showSpeed(device.down_kbs) + " · ↑ " + showSpeed(device.up_kbs)));
   }
@@ -219,8 +227,11 @@ function renderPeople() {
     card.append(node("p", (user.policy_reason ? reasons[user.policy_reason] : "Accesso previsto") +
       " · " + (state.writes_enabled ? "Stato della regola" : "Anteprima"), "flag " + (user.policy_reason ? "warning" : "safe")));
     if (transition) card.append(node("p", transition, "notice"));
+    if (state.last_poll && !state.last_error)
+      card.append(node("p", "Ultima lettura " + clock(state.last_poll), "notice"));
     card.append(node("p", usage === undefined ? "Nessun campione oggi" : usage + " min di presenza osservata oggi", "notice"),
-      profileActions(user, target), node("p"));
+      profileActions(user, target));
+    link.className = "profile-link";
     card.append(link);
     container.append(card);
   }
@@ -420,6 +431,11 @@ function profileSettings(user, path) {
 
 function copySummary(value, group) {
   if (group === "quotas") return Object.entries(value).map(([day, minutes]) => days[day] + " " + minutes + " min");
+  if (group === "web" || group === "services") {
+    if (!Object.keys(value).length) return [];
+    if (group === "web") return dnsWebSummary(value);
+    return dnsServicesSummary(value);
+  }
   return value.map(scheduleSummary);
 }
 
@@ -500,6 +516,13 @@ async function refreshPreview(path, version) {
       preview.next_release ? "Prossima riattivazione " + clock(preview.next_release) : null,
     ];
     $("profile-status").textContent = labels.filter(Boolean).join(" · ");
+    const devices = new Map(preview.devices.map(device => [device.mac, device]));
+    for (const label of $("profile").querySelectorAll("[data-preview-mac]")) {
+      const device = devices.get(label.dataset.previewMac);
+      label.textContent = device?.reason
+        ? "Anteprima · " + reasons[device.reason]
+        : device ? "Anteprima · Accesso previsto" : "";
+    }
     for (const label of $("profile").querySelectorAll("[data-schedule]")) {
       const rule = preview.schedules[label.dataset.schedule];
       label.textContent = rule?.paused ? "Sospesa temporaneamente" : rule?.active ? "In fascia adesso" : "Fuori fascia";
@@ -531,9 +554,13 @@ function showView() {
   };
   add(title, add(node("div", undefined, "row"), back, report));
   if (user.description || user.age_band) title.append(node("p", [user.description, user.age_band].filter(Boolean).join(" · "), "notice"));
+  const openDns = container.dataset.userId === String(user.id)
+    ? new Set([...container.querySelectorAll("details[data-dns][open]")].map(item => item.dataset.dns))
+    : new Set();
+  container.dataset.userId = user.id;
   container.replaceChildren(title, accessSection(user, path), profileDevices(user),
     scheduleSection(user, path, "offtime"), scheduleSection(user, path, "bedtime"),
-    quotaSection(user, path), copySection(user, path), profileSettings(user, path));
+    quotaSection(user, path), dnsSection(user, version, openDns), copySection(user, path), profileSettings(user, path));
   refreshPreview(path, version);
 }
 

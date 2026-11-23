@@ -17,7 +17,8 @@ from app.store import Store
 
 Day = Annotated[int, Field(ge=0, le=6)]
 DailyMinutes = Annotated[int, Field(ge=1, le=1440)]
-RuleGroup = Literal["offtime", "bedtime", "quotas"]
+RuleGroup = Literal["offtime", "bedtime", "quotas", "web", "services"]
+DNS_GROUPS = frozenset({"web", "services"})
 CLOCK = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]")
 SCHEDULE_FIELDS = ("weekday", "start_time", "end_time", "kind", "label", "enabled", "days_mask", "paused_until")
 INSERT_SCHEDULE = """INSERT INTO windows
@@ -111,7 +112,7 @@ class WeeklyQuotas(BaseModel):
 
 class CopySelection(BaseModel):
     source_id: int
-    groups: set[RuleGroup] = Field(min_length=1, max_length=3)
+    groups: set[RuleGroup] = Field(min_length=1, max_length=5)
 
 
 class CopyRequest(CopySelection):
@@ -127,6 +128,10 @@ def profile_config(store: Store, user_id: int, groups: set[str], *, copying: boo
     schedules = store.query("""SELECT * FROM windows WHERE user_id=?
         ORDER BY weekday,start_time,end_time,label,enabled,days_mask,paused_until,id""", (user_id,))
     for group in sorted(groups):
+        if group in DNS_GROUPS:
+            rows = store.query("SELECT data FROM dns_profiles WHERE user_id=? AND group_name=?", (user_id, group))
+            result[group] = json.loads(rows[0]["data"]) if rows else {}
+            continue
         if group == "quotas":
             result[group] = {str(row["weekday"]): row["minutes"] for row in store.query(
                 "SELECT weekday,minutes FROM weekly_quotas WHERE user_id=?", (user_id,)
@@ -146,7 +151,12 @@ def profile_config(store: Store, user_id: int, groups: set[str], *, copying: boo
 
 def replace_config(db, user_id: int, config: dict):
     for group, value in config.items():
-        if group == "quotas":
+        if group in DNS_GROUPS:
+            db.execute("DELETE FROM dns_profiles WHERE user_id=? AND group_name=?", (user_id, group))
+            if value:
+                db.execute("INSERT INTO dns_profiles(user_id,group_name,data) VALUES (?,?,?)",
+                           (user_id, group, canonical(value)))
+        elif group == "quotas":
             db.execute("DELETE FROM weekly_quotas WHERE user_id=?", (user_id,))
             db.executemany("INSERT INTO weekly_quotas(user_id,weekday,minutes) VALUES (?,?,?)",
                            ((user_id, int(day), minutes) for day, minutes in value.items()))
@@ -203,6 +213,7 @@ def profiles_router(store, settings, engine, authenticate, mutation_guard) -> AP
     def delete_user(user_id: int):
         with store.policy_change("eliminazione_profilo", f"profilo={user_id}") as db:
             profile(user_id)
+            db.execute("DELETE FROM dns_devices WHERE mac IN (SELECT mac FROM devices WHERE user_id=?)", (user_id,))
             db.execute("UPDATE devices SET profile_exempt=0 WHERE user_id=?", (user_id,))
             db.execute("DELETE FROM users WHERE id=?", (user_id,))
         return after_change()

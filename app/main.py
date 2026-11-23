@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field, SecretStr, StringConstraints, field_valid
 
 from app.config import Settings, from_env, private_router_ip, release_version
 from app.deco import Adapter, MockAdapter, DecoSdkAdapter, normalize_mac
+from app.dns import dns_router
 from app.diagnostics import PROBE_INTERVAL_SECONDS, ProbeCooldown
 from app.engine import Engine
 from app.policy import next_transitions, profile_reason
@@ -125,6 +126,7 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
     app.state.engine = engine
     app.state.store = store
     app.include_router(profiles_router(store, settings, engine, authenticate, mutation_guard))
+    app.include_router(dns_router(store, settings, authenticate, mutation_guard))
 
     @app.get("/", dependencies=[Depends(authenticate)])
     def home():
@@ -134,6 +136,11 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
     @app.get("/dashboard.js", dependencies=[Depends(authenticate)], include_in_schema=False)
     def dashboard_script():
         return FileResponse(Path(__file__).parent / "static" / "dashboard.js",
+                            media_type="text/javascript", headers=NO_CACHE)
+
+    @app.get("/dns.js", dependencies=[Depends(authenticate)], include_in_schema=False)
+    def dns_script():
+        return FileResponse(Path(__file__).parent / "static" / "dns.js",
                             media_type="text/javascript", headers=NO_CACHE)
 
     @app.get("/api/state", dependencies=[Depends(authenticate)])
@@ -178,6 +185,7 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
             "capabilities": {
                 "client_inventory": last_poll is not None and not last_error,
                 "manual_block": "da_verificare_su_x50" if settings.mode == "deco" else "simulato",
+                "dns_filtering": "esportazione_adguard_manuale",
                 "site_history": False,
                 "app_usage": False,
                 "bandwidth_per_device": "velocita_istantanea_campionata" if settings.mode == "deco" else False,
