@@ -114,6 +114,29 @@ def test_unsupported_read_and_empty_list_are_distinct(fake_deco, sdk):
     assert report.speed_samples == "not_reported"
 
 
+@pytest.mark.parametrize("payload, expected_status, expected_count", [
+    ({"client_list": {}}, "read_only_detected", 0),
+    ({"client_list": []}, "read_only_detected", 0),
+    ({"client_list": {"unrecognized": "shape"}}, "read_error", None),
+    ({}, "read_error", None),
+])
+def test_blacklist_empty_object_and_malformed_responses_are_distinct(
+    fake_deco, payload, expected_status, expected_count
+):
+    adapter, session = fake_deco
+    session.responses["black_list"] = payload
+
+    report = adapter.diagnostics()
+
+    assert report.connection == "read_only_detected"
+    assert report.inventory.count == 1
+    assert report.firmware.status == "read_only_detected"
+    assert report.blocklist.status == expected_status
+    assert report.blocklist.count == expected_count
+    assert session.calls == READS
+    assert report.enforcement == "not_verified"
+
+
 def test_hostile_firmware_content_and_missing_speeds(fake_deco):
     adapter, session = fake_deco
     gateway = session.responses["device_list"]["device_list"][1]
@@ -223,3 +246,127 @@ def test_sdk_failures_stay_out_of_api_audit_and_logs(tmp_path, fake_deco, sdk, c
         assert all(PRIVATE_DETAIL not in item for item in
                    [refresh.text, report.text, state.text, caplog.text])
     assert session.logins == 1
+
+
+def test_manual_probe_uses_submitted_credentials_once(tmp_path, monkeypatch):
+    from app.diagnostics import Diagnostics
+
+    clock = [100.0]
+    monkeypatch.setattr("app.engine.monotonic", lambda: clock[0])
+    attempts = []
+
+    class OneShotProbe:
+        def __init__(self, ip, username, password, *, direct):
+            assert direct
+            self.credentials = ip, username, password
+
+        def diagnostics(self):
+            attempts.append(self.credentials)
+            return Diagnostics(mode="deco", connection="authentication_failed")
+
+    monkeypatch.setattr("app.main.DecoSdkAdapter", OneShotProbe)
+    settings = Settings(admin_password="fixture-admin-password",
+                        database_path=str(tmp_path / "manual-probe.sqlite"))
+    app = create_app(settings)
+    auth = ("admin", settings.admin_password)
+    headers = {"X-Family-Action": "1"}
+    path = "/api/diagnostics/deco"
+    payload = {"router_ip": "192.168.42.2", "username": " fixture-local-user ",
+               "password": " significant space "}
+    with TestClient(app) as client:
+        assert client.post(path, json=payload).status_code == 401
+        assert client.post(path, auth=auth, json=payload).status_code == 403
+        assert not attempts
+
+        response = client.post(path, auth=auth, headers=headers, json=payload)
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-store"
+        assert response.json()["connection"] == "authentication_failed"
+        assert client.get("/api/diagnostics", auth=auth).json() == response.json()
+        assert client.get("/api/state", auth=auth).json()["mode"] == "mock"
+        assert attempts == [("192.168.42.2", "fixture-local-user", payload["password"])]
+        for sensitive in ("192.168.42.2", "fixture-local-user", payload["password"]):
+            assert sensitive not in response.text
+
+        corrected = dict(payload, router_ip="10.0.0.2", password="fixture-corrected")
+        blocked = client.post(path, auth=auth, headers=headers, json=corrected)
+        assert blocked.status_code == 429
+        assert blocked.headers["retry-after"] == "60"
+        assert len(attempts) == 1
+        assert client.post("/api/diagnostics", auth=auth, headers=headers).status_code == 429
+
+        clock[0] += 60
+        assert client.post(path, auth=auth, headers=headers, json=corrected).status_code == 200
+        assert attempts[-1] == ("10.0.0.2", "fixture-local-user", "fixture-corrected")
+
+
+@pytest.mark.parametrize("invalid", [
+    {"router_ip": "8.8.8.8"},
+    {"router_ip": "127.0.0.1"},
+    {"router_ip": "169.254.169.254"},
+    {"router_ip": "192.168.42.2:8443"},
+    {"router_ip": "https://192.168.42.2"},
+    {"router_ip": "deco.local"},
+    {"username": " "},
+    {"password": {"nested": PRIVATE_DETAIL}},
+])
+def test_manual_probe_redacts_invalid_payload(tmp_path, monkeypatch, invalid):
+    def unexpected_adapter(*args, **kwargs):
+        pytest.fail("An invalid request must not start a probe")
+
+    monkeypatch.setattr("app.main.DecoSdkAdapter", unexpected_adapter)
+    settings = Settings(admin_password="fixture-admin-password",
+                        database_path=str(tmp_path / "invalid-probe.sqlite"))
+    app = create_app(settings)
+    with TestClient(app) as client:
+        response = client.post("/api/diagnostics/deco",
+                               auth=("admin", settings.admin_password),
+                               headers={"X-Family-Action": "1"},
+                               json={"router_ip": "192.168.42.2", "username": PRIVATE_DETAIL,
+                                     "password": PRIVATE_DETAIL, **invalid})
+    assert response.status_code == 422
+    assert PRIVATE_DETAIL not in response.text
+
+
+@pytest.mark.skipif(sys.version_info < (3, 14), reason="SDK requires Python 3.14")
+def test_direct_sdk_transport_keeps_cookies_and_rejects_redirects(monkeypatch):
+    from email.message import Message
+    from io import BytesIO
+    from urllib.request import BaseHandler
+    from urllib.response import addinfourl
+
+    sdk = pytest.importorskip("tplink_deco_api")
+    from app.deco_transport import DirectDecoTransport
+
+    monkeypatch.setenv("https_proxy", "http://proxy.invalid:8888")
+    transport = DirectDecoTransport()
+    requests = []
+
+    class FakeHTTPS(BaseHandler):
+        handler_order = 499
+
+        def https_open(self, request):
+            assert not request.has_proxy()
+            assert request.host == "192.168.42.2"
+            requests.append(request)
+            headers = Message()
+            if len(requests) == 1:
+                headers["Set-Cookie"] = "sysauth=abc123; Path=/"
+                status = 200
+            else:
+                assert request.get_header("Cookie") == "sysauth=abc123"
+                headers["Location"] = "https://example.invalid/"
+                status = 302
+            response = addinfourl(BytesIO(b'{"result": {}}'), headers, request.full_url, status)
+            response.msg = "Fake response"
+            return response
+
+    transport._opener.add_handler(FakeHTTPS())
+    url = "https://192.168.42.2/cgi-bin/luci/"
+    assert transport.post_json(url, {"operation": "read"}) == {"result": {}}
+    with pytest.raises(sdk.TransportError) as failure:
+        transport.post_form(url, "fixture")
+    assert failure.value.status_code == 302
+    assert len(requests) == 2
+    assert isinstance(DecoSdkAdapter("192.168.42.2", "fixture", "fixture", direct=True)._connect()._transport,
+                      DirectDecoTransport)

@@ -79,3 +79,41 @@ def test_shutdown_waits_for_poll_before_closing_store(tmp_path):
     asyncio.run(exercise_lifespan())
     with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
         store.users()
+
+
+def test_home_assistant_ingress_requires_supervisor_and_action_header(monkeypatch):
+    from app.config import from_env
+    from app.main import SUPERVISOR_IP
+
+    monkeypatch.setenv("DECO_HA_INGRESS", "true")
+    monkeypatch.setenv("DECO_MODE", "deco")
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    settings = from_env()
+    assert settings.mode == "mock"
+    assert settings.writes_enabled is False
+    assert settings.database_path == ":memory:"
+
+    with TestClient(create_app(settings), client=("192.168.1.15", 9000)) as direct:
+        spoofed = {"X-Forwarded-For": SUPERVISOR_IP, "X-Ingress-Path": "/ingress"}
+        for path in ("/", "/api/diagnostics", "/api/state"):
+            assert direct.get(path, headers=spoofed).status_code == 403
+        assert direct.post("/api/diagnostics/deco", headers=spoofed).status_code == 403
+
+    with TestClient(create_app(settings), client=(SUPERVISOR_IP, 9000)) as via_ha:
+        assert via_ha.get("/").status_code == 200
+        assert via_ha.get("/api/state").json()["ha_ingress"] is True
+        assert via_ha.post("/api/diagnostics").status_code == 403
+        report = via_ha.post("/api/diagnostics", headers={"X-Family-Action": "1"})
+        assert report.status_code == 200
+        assert report.json()["inventory"]["status"] == "simulated"
+
+
+def test_deco_login_form_defaults_to_documented_local_api_user():
+    """Do not mislead users into entering a personal name as the Deco API username."""
+    from pathlib import Path
+
+    html = (Path(__file__).resolve().parents[1] / "app" / "static" / "index.html").read_text()
+    assert 'id="deco-username" value="admin"' in html
+    assert 'password.value=""' in html
+    assert "password del TP-Link ID" in html
+    assert "potrebbe esserci un problema di protocollo" in html

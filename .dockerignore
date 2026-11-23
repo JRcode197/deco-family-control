@@ -1,0 +1,6 @@
+*
+!requirements.txt
+!requirements-deco.txt
+!app/
+!app/**
+**/__pycache__/

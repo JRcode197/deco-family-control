@@ -4,8 +4,8 @@ import logging
 from threading import RLock
 from time import monotonic
 from zoneinfo import ZoneInfo
-from app.deco import Client, HomeAssistantGuardActuator
-from app.diagnostics import Diagnostics, PROBE_INTERVAL_SECONDS
+from app.deco import Adapter, Client, HomeAssistantGuardActuator
+from app.diagnostics import Diagnostics, PROBE_INTERVAL_SECONDS, ProbeCooldown
 from app.policy import local_day, policy_reason, schedule_active
 
 log = logging.getLogger(__name__)
@@ -18,36 +18,36 @@ class Engine:
         self.settings = settings
         self.lock = RLock()
         self.last_poll = None
+        self.last_sample_minute = None
         self.last_error = ""
         self.diagnostics = Diagnostics(mode=settings.mode)
         self._next_probe = 0.0
+        self._last_probe_used_server_settings = True
 
-    def probe_diagnostics(self) -> Diagnostics:
+    def probe_diagnostics(self, adapter: Adapter | None = None) -> Diagnostics:
         with self.lock:
-            if monotonic() >= self._next_probe:
-                report = self.adapter.diagnostics()
-                report.checked_at = datetime.now(ZoneInfo("UTC")).isoformat(timespec="seconds")
-                self.diagnostics = report
-                self._next_probe = monotonic() + PROBE_INTERVAL_SECONDS
-            return self.diagnostics
+            if monotonic() < self._next_probe:
+                if adapter is None and self._last_probe_used_server_settings:
+                    return self.diagnostics
+                raise ProbeCooldown
+            report = (self.adapter if adapter is None else adapter).diagnostics()
+            report.checked_at = datetime.now(ZoneInfo("UTC")).isoformat(timespec="seconds")
+            self.diagnostics = report
+            self._last_probe_used_server_settings = adapter is None
+            self._next_probe = monotonic() + PROBE_INTERVAL_SECONDS
+            return report
 
     def poll(self, now: datetime | None = None) -> dict:
         with self.lock:
             now = now or datetime.now(ZoneInfo(self.settings.timezone))
             try:
                 clients = self.adapter.clients()
-                known = [c.mac for c in clients]
-                for c in clients:
-                    self.store.upsert_client(c, now.isoformat())
-                    if c.online:
-                        # A snapshot of connected Wi-Fi presence, not browsing or screen time.
-                        self.store.observe(local_day(now, self.settings.timezone),
-                                           now.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%MZ"),
-                                           c.mac, c.up_kbs, c.down_kbs)
-                self.store.seen_offline_except(known)
+                minute = now.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%MZ")
+                self.store.record_inventory(clients, now.isoformat(), local_day(now, self.settings.timezone), minute)
                 self.last_poll = now.isoformat()
+                self.last_sample_minute = minute
                 self.last_error = ""
-                actions = self.enforce(now)
+                actions = [] if self.settings.ha_ingress and self.settings.mode == "deco" else self.enforce(now)
                 return {"clients": len(clients), "actions": actions}
             except Exception:
                 self.last_error = "Interrogazione non riuscita. Controlla la diagnostica."

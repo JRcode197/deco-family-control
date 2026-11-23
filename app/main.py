@@ -2,29 +2,45 @@
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import datetime
+from ipaddress import IPv4Address
 from pathlib import Path
+from typing import Annotated
 from zoneinfo import ZoneInfo
 import asyncio
 import hmac
 import logging
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Header
+from fastapi import Depends, FastAPI, HTTPException, Query, Header, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, SecretStr, StringConstraints, field_validator
 
-from app.config import Settings, from_env
-from app.deco import MockAdapter, DecoSdkAdapter, normalize_mac
+from app.config import Settings, from_env, private_router_ip
+from app.deco import Adapter, MockAdapter, DecoSdkAdapter, normalize_mac
+from app.diagnostics import PROBE_INTERVAL_SECONDS, ProbeCooldown
 from app.engine import Engine
 from app.policy import to_minutes
 from app.store import Store
 
 log = logging.getLogger(__name__)
 security = HTTPBasic()
+SUPERVISOR_IP = "172.30.32.2"
+NO_CACHE = {"Cache-Control": "no-store"}
 
 
 class NewUser(BaseModel):
     name: str = Field(min_length=1, max_length=60)
+
+
+class DecoProbeCredentials(BaseModel):
+    router_ip: IPv4Address
+    username: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=254)] = Field(repr=False)
+    password: SecretStr = Field(min_length=1, max_length=1024)
+
+    @field_validator("router_ip")
+    @classmethod
+    def private_address(cls, value: IPv4Address) -> IPv4Address:
+        return private_router_ip(value)
 
 
 class Assignment(BaseModel):
@@ -62,17 +78,26 @@ class Window(BaseModel):
 def create_app(settings: Settings | None = None, *, store: Store | None = None, adapter=None) -> FastAPI:
     settings = settings or from_env()
     store = store or Store(settings.database_path)
-    adapter = adapter or (MockAdapter() if settings.mode == "mock" else
-                          DecoSdkAdapter(settings.router_ip, settings.router_user, settings.router_password))
+    adapter = adapter or (MockAdapter() if settings.mode == "mock" else DecoSdkAdapter(
+        settings.router_ip, settings.router_user, settings.router_password, direct=settings.ha_ingress,
+    ))
     engine = Engine(store, adapter, settings)
+    inventory_only = settings.ha_ingress and settings.mode == "deco"
 
-    def authenticate(credentials: HTTPBasicCredentials = Depends(security)):
+    def admin_authenticate(credentials: HTTPBasicCredentials = Depends(security)):
         valid_user = hmac.compare_digest(credentials.username.encode(), settings.admin_user.encode())
         valid_password = hmac.compare_digest(credentials.password.encode(), settings.admin_password.encode())
         if not (valid_user and valid_password):
             raise HTTPException(status_code=401, detail="Credenziali non valide",
                                 headers={"WWW-Authenticate": "Basic"})
         return credentials.username
+
+    def supervisor_authenticate(request: Request):
+        # Uvicorn uses the TCP peer address because proxy headers are disabled.
+        if request.client is None or request.client.host != SUPERVISOR_IP:
+            raise HTTPException(403, "Apri l'app da Home Assistant.")
+
+    authenticate = supervisor_authenticate if settings.ha_ingress else admin_authenticate
 
     def mutation_guard(x_family_action: str | None = Header(None),
                        _=Depends(authenticate)):
@@ -91,6 +116,10 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
             except TimeoutError:
                 pass
 
+    def policy_guard(_=Depends(mutation_guard)):
+        if inventory_only:
+            raise HTTPException(403, "L'inventario Home Assistant è in sola lettura sul Deco.")
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         stop = asyncio.Event()
@@ -104,7 +133,8 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
             finally:
                 store.close()
 
-    app = FastAPI(title="Deco Family Control", lifespan=lifespan, docs_url=None, redoc_url=None)
+    app = FastAPI(title="Deco Family Control", lifespan=lifespan, docs_url=None, redoc_url=None,
+                  openapi_url=None if settings.ha_ingress else "/openapi.json")
     app.state.engine = engine
     app.state.store = store
 
@@ -116,8 +146,10 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
     @app.get("/api/state", dependencies=[Depends(authenticate)])
     def state():
         day = datetime.now(ZoneInfo(settings.timezone)).date().isoformat()
-        return {
+        return JSONResponse({
             "mode": settings.mode,
+            "ha_ingress": settings.ha_ingress,
+            "inventory_only": inventory_only,
             "router_ip": settings.router_ip,
             "writes_enabled": settings.writes_enabled,
             "quota_enforcement": settings.quota_enforcement,
@@ -126,7 +158,7 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
             "last_poll": engine.last_poll,
             "last_error": engine.last_error,
             "users": store.users(),
-            "devices": store.devices(),
+            "devices": store.devices(sample_minute=engine.last_sample_minute),
             "windows": store.windows(),
             "usage_today": store.usage(day),
             "audit": store.audit(30),
@@ -138,7 +170,7 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
                 "app_usage": False,
                 "bandwidth_per_device": "velocita_istantanea_campionata" if settings.mode == "deco" else False,
             },
-        }
+        }, headers=NO_CACHE)
 
     @app.post("/api/refresh", dependencies=[Depends(mutation_guard)])
     async def refresh():
@@ -152,8 +184,30 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
         return JSONResponse(asdict(engine.diagnostics), headers={"Cache-Control": "no-store"})
 
     @app.post("/api/diagnostics", dependencies=[Depends(mutation_guard)])
-    def probe_diagnostics():
-        report = engine.probe_diagnostics()
+    async def probe_diagnostics():
+        return await run_diagnostics()
+
+    @app.post("/api/diagnostics/deco", dependencies=[Depends(mutation_guard)])
+    async def probe_local_deco(request: Request):
+        try:
+            credentials = DecoProbeCredentials.model_validate_json(await request.body())
+        except ValueError:
+            # The default validation response can echo the submitted payload.
+            raise HTTPException(422, "Inserisci un IPv4 privato, il nome utente e la password del Deco.") from None
+        probe_adapter = DecoSdkAdapter(
+            str(credentials.router_ip), credentials.username,
+            credentials.password.get_secret_value(), direct=True,
+        )
+        return await run_diagnostics(probe_adapter)
+
+    async def run_diagnostics(probe_adapter: Adapter | None = None):
+        try:
+            report = await asyncio.to_thread(engine.probe_diagnostics, probe_adapter)
+        except ProbeCooldown:
+            raise HTTPException(
+                429, "Attendi un minuto tra una verifica e l'altra.",
+                headers={"Retry-After": str(PROBE_INTERVAL_SECONDS), "Cache-Control": "no-store"},
+            ) from None
         return JSONResponse(asdict(report), headers={"Cache-Control": "no-store"})
 
     @app.post("/api/users", dependencies=[Depends(mutation_guard)])
@@ -177,7 +231,7 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
         store.log("assign", "ok", mac, str(payload.user_id))
         return {"ok": True}
 
-    @app.post("/api/manual-block", dependencies=[Depends(mutation_guard)])
+    @app.post("/api/manual-block", dependencies=[Depends(policy_guard)])
     def manual_block(payload: BlockRequest):
         if (payload.mac is None) == (payload.user_id is None):
             raise HTTPException(422, "Specify exactly one of mac or user_id")
@@ -196,7 +250,7 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
             store.log("manual_rule", "ok", detail=f"user={payload.user_id} blocked={payload.blocked}")
         return {"ok": True, "actions": engine.enforce()}
 
-    @app.post("/api/quota", dependencies=[Depends(mutation_guard)])
+    @app.post("/api/quota", dependencies=[Depends(policy_guard)])
     def quota(payload: Quota):
         if (payload.mac is None) == (payload.user_id is None):
             raise HTTPException(422, "Specify exactly one target")
@@ -211,7 +265,7 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
             store.execute("UPDATE users SET quota_minutes=? WHERE id=?", (payload.minutes, payload.user_id))
         return {"ok": True, "note": "Quota based on observed Wi-Fi presence; not screen time"}
 
-    @app.post("/api/windows", dependencies=[Depends(mutation_guard)])
+    @app.post("/api/windows", dependencies=[Depends(policy_guard)])
     def new_window(payload: Window):
         if payload.start_time == payload.end_time:
             raise HTTPException(422, "Start and end must differ")
@@ -222,17 +276,24 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
                                   payload.start_time, payload.end_time))
         return {"id": w_id, "actions": engine.enforce()}
 
-    @app.delete("/api/windows/{window_id}", dependencies=[Depends(mutation_guard)])
+    @app.delete("/api/windows/{window_id}", dependencies=[Depends(policy_guard)])
     def delete_window(window_id: int):
         store.execute("DELETE FROM windows WHERE id=?", (window_id,))
         return {"ok": True, "actions": engine.enforce()}
 
     @app.get("/api/usage", dependencies=[Depends(authenticate)])
     def usage(days: int = Query(7, ge=1, le=90)):
-        return {"data": store.daily_usage(days),
-                "label": "Observed connection minutes and sampled instantaneous speeds (KB/s), NOT data usage totals, app usage or visited websites"}
+        today = datetime.now(ZoneInfo(settings.timezone)).date()
+        return JSONResponse({"data": store.daily_usage(days, today=today),
+                            "label": "Observed connection minutes and sampled instantaneous speeds (KB/s), NOT data usage totals, app usage or visited websites"},
+                            headers=NO_CACHE)
 
     return app
 
 
-app = create_app()
+def __getattr__(name: str):
+    # Preserve app.main:app for direct Uvicorn startup.
+    if name == "app":
+        globals()["app"] = create_app()
+        return globals()["app"]
+    raise AttributeError(name)

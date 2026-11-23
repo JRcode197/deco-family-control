@@ -2,7 +2,9 @@
 import sqlite3
 from pathlib import Path
 from threading import RLock
-from datetime import datetime
+from datetime import date, datetime, timedelta
+
+from app.deco import Client
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -68,8 +70,11 @@ class Store:
     def users(self) -> list[dict]:
         return self.query("SELECT * FROM users ORDER BY name")
 
-    def devices(self) -> list[dict]:
-        return self.query("SELECT d.*, u.name AS user_name FROM devices d LEFT JOIN users u ON u.id = d.user_id ORDER BY d.name")
+    def devices(self, sample_minute: str | None = None) -> list[dict]:
+        return self.query("""SELECT d.*, u.name AS user_name, s.up_kbs, s.down_kbs
+          FROM devices d LEFT JOIN users u ON u.id = d.user_id
+          LEFT JOIN minute_samples s ON d.online=1 AND s.mac=d.mac AND s.minute=?
+          ORDER BY d.name""", (sample_minute,))
 
     def windows(self) -> list[dict]:
         return self.query("SELECT * FROM windows ORDER BY user_id, weekday, start_time")
@@ -81,26 +86,19 @@ class Store:
         self.execute("INSERT INTO audit(time,mac,action,status,detail) VALUES (?,?,?,?,?)", (
             datetime.now().astimezone().isoformat(timespec="seconds"), mac, action, status, detail[:300]))
 
-    def upsert_client(self, client, seen_at: str):
-        self.execute("""INSERT INTO devices(mac,name,ip,online,client_type,last_seen)
-          VALUES(?,?,?,?,?,?) ON CONFLICT(mac) DO UPDATE SET
-          name=excluded.name, ip=excluded.ip, online=excluded.online,
-          client_type=excluded.client_type, last_seen=excluded.last_seen""",
-          (client.mac, client.name, client.ip, int(client.online), client.client_type, seen_at))
-
-    def seen_offline_except(self, macs: list[str]):
-        if macs:
-            placeholders = ",".join("?" for _ in macs)
-            self.execute(f"UPDATE devices SET online=0 WHERE mac NOT IN ({placeholders})", tuple(macs))
-        else:
-            self.execute("UPDATE devices SET online=0")
-
-    def observe(self, local_day: str, minute: str, mac: str,
-                up_kbs: int | None = None, down_kbs: int | None = None):
-        self.execute("""INSERT INTO minute_samples(day,minute,mac,up_kbs,down_kbs)
-          VALUES (?,?,?,?,?) ON CONFLICT(minute,mac) DO UPDATE SET
-          up_kbs=excluded.up_kbs,down_kbs=excluded.down_kbs""",
-          (local_day, minute, mac, up_kbs, down_kbs))
+    def record_inventory(self, clients: list[Client], seen_at: str, local_day: str, minute: str):
+        with self.lock, self.db:
+            # Devices omitted from a successful snapshot keep their assignments and history.
+            self.db.execute("UPDATE devices SET online=0 WHERE online=1")
+            self.db.executemany("""INSERT INTO devices(mac,name,ip,online,client_type,last_seen)
+              VALUES(?,?,?,?,?,?) ON CONFLICT(mac) DO UPDATE SET
+              name=excluded.name, ip=excluded.ip, online=excluded.online,
+              client_type=excluded.client_type, last_seen=excluded.last_seen""",
+                ((c.mac, c.name, c.ip, int(c.online), c.client_type, seen_at) for c in clients))
+            self.db.executemany("""INSERT INTO minute_samples(day,minute,mac,up_kbs,down_kbs)
+              VALUES(?,?,?,?,?) ON CONFLICT(minute,mac) DO UPDATE SET
+              up_kbs=excluded.up_kbs,down_kbs=excluded.down_kbs""",
+                ((local_day, minute, c.mac, c.up_kbs, c.down_kbs) for c in clients if c.online))
 
     def usage(self, day: str) -> dict:
         individual = self.query("""SELECT mac, COUNT(*) AS minutes FROM minute_samples
@@ -111,14 +109,16 @@ class Store:
         return {"devices": {x["mac"]: x["minutes"] for x in individual},
                 "users": {x["user_id"]: x["minutes"] for x in collective}}
 
-    def daily_usage(self, days: int = 7) -> list[dict]:
+    def daily_usage(self, days: int = 7, *, today: date | None = None) -> list[dict]:
+        today = today or date.today()
+        first_day = today - timedelta(days=days - 1)
         return self.query("""SELECT day, d.user_id, d.mac, COUNT(*) AS minutes,
           ROUND(AVG(up_kbs), 1) AS average_up_kbs,
           ROUND(AVG(down_kbs), 1) AS average_down_kbs,
           MAX(up_kbs) AS max_up_kbs, MAX(down_kbs) AS max_down_kbs
           FROM minute_samples s JOIN devices d USING(mac)
-          WHERE day>=date('now', ?)
-          GROUP BY day, d.user_id, d.mac ORDER BY day DESC""", (f"-{days-1} days",))
+          WHERE day BETWEEN ? AND ?
+          GROUP BY day, d.user_id, d.mac ORDER BY day DESC""", (first_day.isoformat(), today.isoformat()))
 
     def close(self):
         with self.lock:
