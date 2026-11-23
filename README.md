@@ -50,6 +50,10 @@ On Home Assistant installations with the app store, add this repository, install
 
 ### Read-only diagnostics on the home LAN
 
+**Authentication note for Deco X50:** The local SDK uses a signed `md5(username + password)` handshake and its standard examples use `admin` as **API username**, even when the Deco browser login presents only a password field. Start with `admin` and the **owner TP-Link ID password**, not the person's name, Wi-Fi key, or dashboard password. First confirm the password works at the router's LAN web page. An `authentication_failed` status is not conclusive evidence that a password is wrong: an incompatible firmware protocol, a rejected session, or temporary lockout may produce a similar symptom. Avoid repeated attempts; if owner web login succeeds but API probing fails, report only the redacted JSON, X50 hardware revision and firmware. Do **not** put passwords, tokens, cookies or raw logs in GitHub. The probe never writes to the router.
+
+
+
 1. On a machine connected to the home LAN, start the app using the Quickstart above. Keep `DECO_MODE=mock` and `DECO_WRITE_ENABLED=false` for this one-off check. The `.env` file only needs the usual dashboard login settings and defaults.
 2. Sign in to the local dashboard. In **Diagnostica Deco X50**, enter the Deco's private IPv4 address, username and password for its web interface. Choose **Esegui verifica in sola lettura**. The probe uses those details for one session covering the client inventory, gateway firmware, and blocklist. The password field clears on submission. The app retains only the redacted report in memory.
 3. Open **Risultato JSON** and return that JSON in the issue or PR, along with the hardware revision from the Deco app if known. The report contains statuses, counts, and recognized firmware metadata. Share only that report and the requested metadata. `/api/state`, screenshots and database exports can contain household device identifiers.
