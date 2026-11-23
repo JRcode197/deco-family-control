@@ -59,3 +59,16 @@ App screenshot: X50 main in basement, 192.168.21.1, firmware 1.11.1 Build 260817
 ## 7. Repository workflow
 
 Private repo by default, branch protection, CI test on Python 3.14, no secrets, issue-based roadmap. Codex should read this PRD, inspect SDK pinned version, run tests and make small reviewable PRs instead of broad unreviewed code changes.
+## 8. Piano aggiornato per la versione 0.3.0
+
+| Fase | Incremento 0.3.0 | Verifica o lavoro successivo |
+| --- | --- | --- |
+| A · Profili | Dettaglio mobile, assegnazioni per MAC, eccezioni sui dispositivi, CRUD delle fasce, modelli, copia selettiva con anteprima e ripristino. | Verificare l’aggiornamento dell’add-on sulla macchina di casa. |
+| B · Tempo | Offtime, Bedtime, sovrapposizioni, scadenze UTC, anteprima in Europe/Rome e quote settimanali configurabili. | Collaudare l’attuatore X50 separatamente. Valutare una sorgente di attività prima di applicare quote automatiche. |
+| C · Contenuti | Regole DNS per client AdGuard Home, esportazione manuale, import liste per categoria, impostazioni SafeSearch e YouTube, servizi permanenti e anteprima delle fasce. | Verificare client e resolver sulla LAN. Solo dopo, introdurre un eventuale provider con convergenza, verifica di stato e rollback. |
+| D · Statistiche | Presenza osservata deduplicata per minuto UTC e profilo, velocità disponibili, periodo personalizzato, retention e cancellazione. | Verificare eventuali contatori per intervallo o per flusso. Conservare provenienza e copertura. |
+| E · X50 | Letture e diagnostica esistenti. Procedura per dimostrare perdita e ripristino di Internet su un singolo dispositivo. | Eseguire la prova su X50 e registrare firmware, tipo di attuatore ed evidenza di connettività. |
+
+Le assegnazioni attuali determinano le aggregazioni storiche per profilo. Le fasce ricorrenti usano l’ora locale e il giorno di inizio. Dispositivi protetti e deroghe si applicano prima delle regole ereditate. Le eccezioni DNS vengono risolte solo nel loro ambito e non cambiano le decisioni dell’attuatore Internet.
+
+La soglia per l’applicazione automatica delle quote richiede una sorgente locale che distingua periodi di traffico Internet, lacune e inattività con un metodo verificabile. Il motore deve aggregare l’unione degli intervalli per persona e giorno locale. La presenza osservata e i campioni di velocità disponibili non soddisfano quel requisito. Il tempo di utilizzo per app rimane indisponibile senza una sorgente separata attendibile.

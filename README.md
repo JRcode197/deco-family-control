@@ -11,24 +11,26 @@ A **local-first, no-subscription** parental network policy prototype for TP-Link
 - Family profiles (examples): **Alice**, **Anna**; each profile may own several devices.
 - No Archer C6, no new router. An **always-on local** Linux/Docker host is required for schedules (can be separate from the Deco). Codex cloud is for development, **not** for controlling an inaccessible private LAN.
 
-## Features implemented
+## Funzionalità nella versione 0.3.0
 
-- Live/simulated Deco device list; assign multiple device MACs to users.
-- Manual user/device block policy, schedules per weekday including overnight, user/device quota settings.
-- Background 60s polling, local SQLite event log, manual refresh, mobile-friendly control panel.
-- Daily per-device and per-user **sampled connection presence**, plus SDK-provided instantaneous upload/download rate snapshots in KB/s (average/max, **not byte totals**); shared-person minutes count each observed minute only once even with two connected devices. Not browsing minutes.
-- Preview-only default; no router writes. Router management must be tested on a disposable device.
-- Authentication, anti-CSRF header on mutations, loopback-only default compose binding and no stored secrets in the repo.
+- Profili familiari con più dispositivi e associazioni persistenti per MAC. L’inventario reale è disponibile in Home Assistant Ingress con le credenziali nelle opzioni protette dell’app.
+- Offtime, Bedtime, blocchi manuali, tempo aggiuntivo e deroghe. Il motore calcola l’anteprima, le prossime transizioni e le scadenze persistenti. **Home Assistant mantiene il Deco in sola lettura.**
+- Modelli settimanali e copia selettiva tra profili con anteprima e ripristino. Le quote Internet giornaliere sono obiettivi configurabili.
+- Domini, categorie, SafeSearch, YouTube e catalogo servizi configurabili localmente. Il passaggio opzionale ad AdGuard Home avviene tramite regole DNS per client da applicare manualmente.
+- Presenza campionata e velocità osservate con viste per profilo, dispositivo e periodo. Campioni gestiti in SQLite con conservazione configurabile.
+- Dashboard responsive in italiano, accesso amministratore e conferma per operazioni come cancellazione e sovrascrittura.
+
+Consulta le [istruzioni di installazione e aggiornamento](DOCS.md#installare-o-aggiornare-lapp-home-assistant), la [matrice delle funzionalità](DOCS.md#matrice-delle-funzionalità) e il [collaudo locale X50](DOCS.md#collaudo-fisico-deco-x50).
 
 ## Non-goals and unresolved integration risks
 
-1. `tplink-deco-api` 2.2.0 uses the Deco local API; actual protocol compatibility with the X50 firmware has **not been verified**. `get_client_list()` may return incomplete/offline data. Credentials are the **admin web interface login** (often TP-Link ID) accepted by local firmware; do not assume `admin` works on every model.
+1. `tplink-deco-api` 2.2.0 uses the Deco local API; read-only inventory has been observed on the reported X50 firmware. Other operations require individual verification. `get_client_list()` may return incomplete/offline data. Credentials are the **admin web interface login** (often TP-Link ID) accepted by local firmware; do not assume `admin` works on every model.
 2. The SDK's `clients.block()` may change the router's block list **without enforcing the internet block** on some firmwares. [Deco Guard](https://github.com/leewsimpson/ha-deco-guard) reports that on BE85 an SSH/TMP app protocol is necessary. Its API may not work with X50; nothing in this project claims otherwise. Test actual internet reachability after block and after unblock.
 3. Current `managed_block` tracks accepted control commands, **not verified enforcement**. For strong enforcement use the `ha_guard` actuator only if the separate Home Assistant Deco Guard integration passes X50 tests. It is GPL-3.0 and is **not copied or bundled** here.
 4. HomeShield `patrol_insights` and DPI endpoints are documented but may be subscription gated. No attempt is made to circumvent paid functions. Sites and apps history require a separately configured DNS logger such as AdGuard Home and have privacy/coverage limits.
 5. iOS private MAC set to **Fisso** for home SSID. VPN, private relay, encrypted DNS and other Wi-Fi networks can bypass DNS-based controls. Router-based blocks operate only on traffic via this Deco, not cellular/offline apps.
 6. When the local host is down, new schedules are not enforced. Existing device blocks may persist on the router. Do not deploy to a machine which sleeps.
-7. Auto quota enforcement intentionally defaults **OFF** because observed Wi-Fi presence can include idle devices. We cannot equate device online time with time spent online.
+7. Automatic Internet quotas remain unavailable on real hardware. The legacy presence-based quota is available only for standalone simulation.
 
 ## Quickstart (safe simulation)
 
@@ -68,20 +70,16 @@ For continuous local polling, set `DECO_MODE=deco`, `DECO_ROUTER_IP`, `DECO_USER
 
 ### Separate physical block/unblock test
 
-Run this only on the home LAN after explicitly authorizing router writes for the test. Use a fresh test database with no active rules or quotas, a spare Wi-Fi client with a stable MAC, and a second administration device. Record that both devices can reach the Internet initially. Disable cellular and other fallback connections on the spare device. Add the management host and device MACs to `PROTECTED_MACS` before enabling local commands.
-
-Using the SDK actuator, issue a manual block for **only the spare device**. Record whether the router accepted the command and whether a fresh HTTPS request from the device fails while the administration device stays online. Unblock the spare device and verify a fresh HTTPS request succeeds again. If the app cannot undo the block, remove it from the Deco app using the administration device. Restore `DECO_WRITE_ENABLED=false` and recreate the service.
-
-Report the firmware, actuator, command response, connectivity before/during/after, and whether the administration device stayed online. Omit device identifiers and credentials. Use **physically verified** only when the test shows both loss and recovery of connectivity. A blocklist entry or HTTP success records **command accepted (unverified)**. Repeat the test after firmware or actuator changes.
+The documented local procedure uses one spare client, an independent administration device and a recovery check. API success and blocklist changes are recorded separately from demonstrated Internet denial. See the [local verification procedure](DOCS.md#collaudo-fisico-deco-x50).
 
 ### Compatibility matrix
 
 | Capability | SDK or integration evidence | Deco X50 · 1.11.1 Build 26081714 Rel. 32981 |
 | --- | --- | --- |
-| Client inventory and gateway firmware | SDK 2.2.0 documents local inventory and mesh device-list reads. The diagnostic checks them individually. | Pending a local **read-only detected** result. An explicit HTTP 404 or 501 for a read is **not supported**. |
+| Client inventory and gateway firmware | SDK 2.2.0 documents local inventory and mesh device-list reads. The diagnostic checks them individually. | Local inventory reported with 33 devices and firmware metadata. An explicit HTTP 404 or 501 for a read is **not supported**. |
 | Blocklist visibility | `clients.get_blocked()` reads the mesh blocklist. The diagnostic validates the list shape and reports only its count. | Read-only check pending. |
 | Actual Internet block and recovery | `clients.block()` sends a blocklist operation. `clients.unblock()` sends the inverse operation. | **Unverified** until the separate physical test. |
-| Presence and sampled speeds | Presence counts observed Wi-Fi connection minutes. SDK speed fields are instantaneous KB/s samples. SDK `get_client_totals()` sums speeds. | Sample availability pending. Byte counters, iOS screen time and app/site history are unavailable in this integration. |
+| Presence and sampled speeds | Presence counts minutes with an online inventory observation. SDK speed fields are instantaneous KB/s samples. SDK `get_client_totals()` sums speeds. | Instantaneous speeds observed. Byte counters, iOS screen time and app/site history are unavailable in this integration. |
 | Optional Home Assistant Deco Guard | Separate GPL-3.0-or-later integration. Upstream reports testing on BE85 fw 1.2.4 and uses the app management protocol to complement the web API. | X50 compatibility and physical enforcement pending. |
 
 ## Development
@@ -92,7 +90,7 @@ Requires Python 3.14 for the real SDK, but mock tests use the basic requirements
 python -m venv .venv
 . .venv/bin/activate
 pip install -r requirements-dev.txt
-ADMIN_PASSWORD=local-test-pass-not-for-production DATABASE_PATH=./var/family.sqlite3 uvicorn app.main:app --reload --host 127.0.0.1 --port 8088
+ADMIN_PASSWORD=local-test-pass-not-for-production DATABASE_PATH=./var/family.sqlite3 uvicorn app.main:app --reload --no-access-log --host 127.0.0.1 --port 8088
 pytest -q
 ```
 
@@ -101,12 +99,12 @@ SDK install: `pip install -r requirements-deco.txt` using Python 3.14.
 ### Issue #1 review and test coverage
 
 - The API uses HTTP Basic for the dashboard and protected routes, plus `X-Family-Action` for actions. The diagnostic's cached GET performs no router I/O. Neither the diagnostic nor the application's failure logs include raw SDK responses, exception messages or session URLs.
-- SQLite uses one connection guarded by a lock. Shutdown waits for the polling worker before closing it. Policy and snapshot writes currently commit statement by statement. Multi-statement atomicity and crash recovery still need dedicated tests.
+- SQLite uses one connection guarded by a lock. Shutdown waits for the polling worker before closing it. Inventory snapshots and profile configuration changes commit as transactions. Tests cover additive migration, profile copy and restore, and expiry across restart.
 - Fake SDK sessions cover endpoint absence, empty and malformed results, credential failure, retry backoff, read-only operation selection and redaction. API tests cover authentication, the action header and result caching. Real firmware response shapes, device reachability, and sustained polling under concurrent requests require separate verification.
 
 ## Next development tasks for Codex
 
-See [`PRD.md`](PRD.md) and [`CODEX_START.md`](CODEX_START.md). Collect the X50 read-only results and run the separate block/unblock field test. Detailed usage telemetry requires an appropriate local data source.
+See [`PRD.md`](PRD.md) and [`CODEX_START.md`](CODEX_START.md). Run the separate block/unblock field test and verify AdGuard Home client identity and DNS behavior on the home LAN. Effective quotas require an appropriate activity source. See the staged plan in the PRD.
 
 ## Third-party projects evaluated
 
