@@ -7,6 +7,5 @@ WORKDIR /opt/app
 COPY requirements-deco.txt requirements.txt ./
 RUN pip install --no-cache-dir -r requirements-deco.txt && useradd --create-home --uid 10001 family && mkdir /data && chown family:family /data
 COPY --chown=family:family app ./app
-USER family
 EXPOSE 8080
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--no-server-header", "--no-proxy-headers"]
+CMD ["python", "-m", "app.server"]

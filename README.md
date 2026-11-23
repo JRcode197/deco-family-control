@@ -46,7 +46,7 @@ Sign in with `ADMIN_USER` / `ADMIN_PASSWORD`. Add Alice and Anna, assign mock de
 
 ### Home Assistant
 
-On Home Assistant installations with the app store, add this repository, install **Deco Family Control**, and select **Start → Open web UI**. Home Assistant Ingress handles access, including from the iPhone companion app. The Deco connection details are entered in the diagnostic form for one read-only check. See [the Home Assistant instructions](DOCS.md).
+On Home Assistant installations with the app store, add this repository, install **Deco Family Control**, and select **Start → Open web UI**. Home Assistant Ingress restricts access to administrators. Enable the optional read-only inventory in the app configuration to assign detected devices to people and persist the history across restarts. See [the Home Assistant instructions](DOCS.md).
 
 ### Read-only diagnostics on the home LAN
 

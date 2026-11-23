@@ -1,6 +1,6 @@
 name: Deco Family Control
-description: Diagnostica Deco X50 in sola lettura e simulazione delle regole.
-version: "0.1.0"
+description: Inventario Deco X50 in sola lettura e profili famiglia.
+version: "0.2.0"
 slug: deco_family_control
 url: https://github.com/JRcode197/deco-family-control
 arch:
@@ -10,5 +10,16 @@ boot: manual
 ingress: true
 ingress_port: 8080
 panel_icon: mdi:router-wireless
+panel_admin: true
+backup: cold
 environment:
   DECO_HA_INGRESS: "true"
+options:
+  inventory_enabled: false
+  deco_ip: "192.168.21.1"
+  deco_username: "admin"
+schema:
+  inventory_enabled: bool
+  deco_ip: str
+  deco_username: str
+  deco_password: "password?"

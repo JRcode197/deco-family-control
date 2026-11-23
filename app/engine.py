@@ -18,6 +18,7 @@ class Engine:
         self.settings = settings
         self.lock = RLock()
         self.last_poll = None
+        self.last_sample_minute = None
         self.last_error = ""
         self.diagnostics = Diagnostics(mode=settings.mode)
         self._next_probe = 0.0
@@ -41,18 +42,12 @@ class Engine:
             now = now or datetime.now(ZoneInfo(self.settings.timezone))
             try:
                 clients = self.adapter.clients()
-                known = [c.mac for c in clients]
-                for c in clients:
-                    self.store.upsert_client(c, now.isoformat())
-                    if c.online:
-                        # A snapshot of connected Wi-Fi presence, not browsing or screen time.
-                        self.store.observe(local_day(now, self.settings.timezone),
-                                           now.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%MZ"),
-                                           c.mac, c.up_kbs, c.down_kbs)
-                self.store.seen_offline_except(known)
+                minute = now.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%MZ")
+                self.store.record_inventory(clients, now.isoformat(), local_day(now, self.settings.timezone), minute)
                 self.last_poll = now.isoformat()
+                self.last_sample_minute = minute
                 self.last_error = ""
-                actions = self.enforce(now)
+                actions = [] if self.settings.ha_ingress and self.settings.mode == "deco" else self.enforce(now)
                 return {"clients": len(clients), "actions": actions}
             except Exception:
                 self.last_error = "Interrogazione non riuscita. Controlla la diagnostica."

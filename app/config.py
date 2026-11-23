@@ -1,6 +1,20 @@
 from dataclasses import dataclass, field
+from ipaddress import IPv4Address, IPv4Network
+import json
 from os import environ
+from pathlib import Path
 from zoneinfo import ZoneInfo
+
+
+HA_OPTIONS_PATH = Path("/data/options.json")
+HA_DATABASE_PATH = "/data/inventory/family.sqlite3"
+PRIVATE_LAN_RANGES = tuple(IPv4Network(cidr) for cidr in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
+
+
+def private_router_ip(value: IPv4Address) -> IPv4Address:
+    if not any(value in network for network in PRIVATE_LAN_RANGES):
+        raise ValueError("Private LAN IPv4 address required")
+    return value
 
 
 @dataclass(frozen=True)
@@ -23,12 +37,39 @@ class Settings:
     ha_ingress: bool = False
 
 
+def ha_settings() -> Settings:
+    try:
+        options = json.loads(HA_OPTIONS_PATH.read_bytes())
+    except FileNotFoundError:
+        options = {}
+    except (OSError, ValueError):
+        raise ValueError("Impossibile leggere le opzioni Home Assistant.") from None
+    if not isinstance(options, dict):
+        raise ValueError("Formato delle opzioni Home Assistant non valido.")
+    if options.get("inventory_enabled") is not True:
+        return Settings(ha_ingress=True, database_path=":memory:")
+
+    ip = options.get("deco_ip", "192.168.21.1")
+    username = options.get("deco_username", "admin")
+    password = options.get("deco_password")
+    try:
+        router_ip = str(private_router_ip(IPv4Address(ip.strip())))
+    except (AttributeError, ValueError):
+        raise ValueError("Imposta un IPv4 privato del Deco nelle opzioni Home Assistant.") from None
+    if not isinstance(username, str) or not username.strip() or not isinstance(password, str) or not password:
+        raise ValueError("Imposta l'utente API e la password del Deco nelle opzioni Home Assistant.")
+    return Settings(
+        mode="deco", ha_ingress=True, database_path=HA_DATABASE_PATH,
+        router_ip=router_ip, router_user=username.strip(), router_password=password,
+    )
+
+
 def from_env() -> Settings:
     def enabled(name: str) -> bool:
         return environ.get(name, "false").lower() == "true"
 
     if enabled("DECO_HA_INGRESS"):
-        return Settings(ha_ingress=True, database_path=":memory:")
+        return ha_settings()
 
     values = Settings(
         mode=environ.get("DECO_MODE", "mock"),
