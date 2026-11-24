@@ -621,7 +621,11 @@ function table(headings, rows) {
     cell.scope = "col";
     return cell;
   })));
-  const body = add(node("tbody"), ...rows.map(row => add(node("tr"), ...row.map(value => value instanceof Node ? add(node("td"), value) : node("td", value)))));
+  const body = add(node("tbody"), ...rows.map(row => add(node("tr"), ...row.map((value, index) => {
+    const cell = value instanceof Node ? add(node("td"), value) : node("td", value);
+    cell.dataset.label = headings[index];
+    return cell;
+  }))));
   return add(node("div", undefined, "tablewrap"), add(node("table"), head, body));
 }
 
