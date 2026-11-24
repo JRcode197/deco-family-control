@@ -1,3 +1,7 @@
+## 0.3.1
+
+- Conservazione automatica dei campioni dalla dashboard con periodi da 7, 30, 90 o 180 giorni e scelta persistente.
+
 ## 0.3.0
 
 - Dettaglio profilo mobile con avatar, descrizione, fascia di età, assegnazioni e deroghe sui dispositivi.

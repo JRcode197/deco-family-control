@@ -216,3 +216,31 @@ def test_migrate_legacy_sqlite_and_prune_observations(tmp_path):
     assert store.usage("2026-11-23")["users"] == {}
     assert store.devices()[0]["user_id"] == 1
     store.close()
+
+
+def test_sample_retention_saved_pruned_and_applied_after_restart(ha_client):
+    connect, snapshots, clock = ha_client
+    with connect() as client:
+        client.post("/api/refresh").raise_for_status()
+        store = client.app.state.store
+        for age in (7, 6):
+            moment = clock.instant - timedelta(days=age)
+            store.record_inventory(snapshots, moment.isoformat(), moment.date().isoformat(),
+                                   moment.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%MZ"))
+        uri = "/api/usage/retention"
+        assert client.put(uri, json={"days": 8}).status_code == 422
+        assert client.put(uri, headers={"X-Family-Action": "0"}, json={"days": 7}).status_code == 403
+        assert client.put(uri, json={"days": 7}).raise_for_status().json()["removed"] == len(snapshots)
+        report = client.get("/api/usage?days=30").raise_for_status().json()
+        assert report["retention_override"] == report["retention_days"] == 7
+        assert {row["day"] for row in report["data"]} == {"2026-11-17", "2026-11-23"}
+
+    clock.instant += timedelta(days=1)
+    with connect() as restarted:
+        restarted.post("/api/refresh").raise_for_status()
+        report = restarted.get("/api/usage?days=30").raise_for_status().json()
+        assert report["retention_override"] == report["retention_days"] == 7
+        assert {row["day"] for row in report["data"]} == {"2026-11-23", "2026-11-24"}
+        restarted.put(uri, json={"days": None}).raise_for_status()
+        report = restarted.get("/api/usage").json()
+        assert report["retention_override"] is None and report["retention_days"] == 0

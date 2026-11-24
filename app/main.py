@@ -4,7 +4,7 @@ from dataclasses import asdict
 from datetime import date, datetime, timedelta
 from ipaddress import IPv4Address
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
 import asyncio
 import hmac
@@ -39,6 +39,10 @@ class DecoProbeCredentials(BaseModel):
     @classmethod
     def private_address(cls, value: IPv4Address) -> IPv4Address:
         return private_router_ip(value)
+
+
+class SampleRetention(BaseModel):
+    days: Literal[0, 7, 30, 90, 180] | None
 
 
 class Assignment(BaseModel):
@@ -311,7 +315,9 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
                 mac = normalize_mac(mac)
             except ValueError:
                 raise HTTPException(422, "Indirizzo MAC non valido.") from None
-        devices, profiles = store.usage_report(start, end, user_id=user_id, mac=mac)
+        with store.lock:
+            devices, profiles = store.usage_report(start, end, user_id=user_id, mac=mac)
+            selected = store.sample_retention()
         return JSONResponse({
             "data": devices,
             "profiles": profiles,
@@ -319,11 +325,18 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
             "end": end.isoformat(),
             "timezone": settings.timezone,
             "poll_seconds": settings.poll_seconds,
-            "retention_days": settings.retention_days,
+            "retention_days": settings.retention_days if selected is None else selected,
+            "retention_override": selected,
+            "retention_default": settings.retention_days,
             "source": "Inventario Deco" if settings.mode == "deco" else "Simulazione",
             "label": "Presenza in rete osservata per minuto UTC e velocità istantanee (KB/s). "
                      "I profili usano le assegnazioni attuali.",
         }, headers=NO_CACHE)
+
+    @app.put("/api/usage/retention", dependencies=[Depends(mutation_guard)])
+    def save_retention(payload: SampleRetention):
+        today = datetime.now(ZoneInfo(settings.timezone)).date().isoformat()
+        return {"removed": store.set_sample_retention(payload.days, settings.retention_days, today)}
 
     @app.delete("/api/usage", dependencies=[Depends(mutation_guard)])
     def clear_usage(through: date | None = None):

@@ -585,6 +585,11 @@ function table(headings, rows) {
 }
 
 function renderReport(result, hasDevice) {
+  const retention = $("retention-days");
+  retention.value = result.retention_override ?? "";
+  retention.options[0].textContent = "Usa le impostazioni dell’app (" +
+    (result.retention_default ? result.retention_default + " giorni" : "senza scadenza") + ")";
+  $("sample-retention").querySelector("button").disabled = false;
   const history = $("history");
   history.replaceChildren();
   $("report-source").textContent = [
@@ -743,6 +748,19 @@ $("report-period").onchange = () => {
   }
 };
 $("report-form").onsubmit = event => { event.preventDefault(); loadReport(); };
+$("sample-retention").onsubmit = async event => {
+  event.preventDefault();
+  const control = $("retention-days");
+  const days = control.value === "" ? null : Number(control.value);
+  if (days !== 0 && !confirm("Salvare la conservazione? I campioni fuori dal periodo impostato saranno eliminati.")) return;
+  const button = event.currentTarget.querySelector("button");
+  button.disabled = true;
+  try {
+    await save("usage/retention", "PUT", {days}, "Conservazione salvata.");
+  } finally {
+    button.disabled = false;
+  }
+};
 $("clear-samples").onsubmit = event => {
   event.preventDefault();
   const through = $("clear-through").value;

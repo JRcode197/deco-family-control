@@ -9,7 +9,7 @@ Deco Family Control è un prototipo di controllo parentale della rete locale per
 - TP-Link Deco X50 con accesso all’interfaccia web locale.
 - Home Assistant con supporto per le app oppure un host locale con Docker. Tieni acceso l’host per eseguire la programmazione.
 
-## Funzionalità nella versione 0.3.0
+## Funzionalità nella versione 0.3.1
 
 - Profili familiari con più dispositivi e associazioni persistenti per MAC. L’inventario reale è disponibile in Home Assistant Ingress con le credenziali nelle opzioni protette dell’app.
 - Offtime, Bedtime, blocchi manuali, tempo aggiuntivo e deroghe. Il motore calcola l’anteprima, le prossime transizioni e le scadenze persistenti. **Home Assistant mantiene il Deco in sola lettura.**

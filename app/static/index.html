@@ -61,6 +61,18 @@ summary{cursor:pointer;color:var(--accent);margin-bottom:10px}details:not([open]
 <div id="history"></div>
 <details><summary>Conservazione dei campioni</summary>
 <p class="notice">L’eliminazione riguarda le osservazioni storiche di presenza e velocità. Inventario, configurazioni e registro delle operazioni rimangono disponibili.</p>
+<form id="sample-retention" class="controls">
+<label>Conservazione automatica<select id="retention-days">
+<option value="">Usa le impostazioni dell’app</option>
+<option value="0">Senza scadenza</option>
+<option value="7">Ultima settimana (7 giorni)</option>
+<option value="30">Ultimo mese (30 giorni)</option>
+<option value="90">Ultimo trimestre (90 giorni)</option>
+<option value="180">Ultimo semestre (180 giorni)</option>
+</select></label>
+<button disabled>Salva conservazione</button>
+</form>
+<p class="notice">Il periodo include oggi. Al salvataggio i campioni già fuori dal periodo scelto vengono eliminati.</p>
 <form id="clear-samples" class="controls">
 <label>Fino al giorno incluso (facoltativo)<input id="clear-through" type="date"></label>
 <button class="danger">Elimina campioni</button>

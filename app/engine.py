@@ -24,7 +24,7 @@ class Engine:
         self._next_probe = 0.0
         self._last_probe_used_server_settings = True
         self.presence_quota_simulation = settings.mode == "mock" and settings.quota_enforcement
-        self._retention_day = None
+        self._last_retention = None
 
     def probe_diagnostics(self, adapter: Adapter | None = None) -> Diagnostics:
         with self.lock:
@@ -44,9 +44,12 @@ class Engine:
             try:
                 zone = ZoneInfo(self.settings.timezone)
                 day = local_day(now or datetime.now(zone), self.settings.timezone)
-                if self.settings.retention_days and day != self._retention_day:
-                    self.store.prune_samples(self.settings.retention_days, day)
-                    self._retention_day = day
+                with self.store.lock:
+                    selected = self.store.sample_retention()
+                    days = self.settings.retention_days if selected is None else selected
+                    if (day, days) != self._last_retention:
+                        self.store.prune_samples(days, day)
+                        self._last_retention = (day, days)
                 clients = self.adapter.clients()
                 now = now or datetime.now(zone)
                 day = local_day(now, self.settings.timezone)
