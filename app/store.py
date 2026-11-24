@@ -1,8 +1,9 @@
 """SQLite persistence. All public DB operations share a re-entrant lock."""
+from contextlib import contextmanager
 import sqlite3
 from pathlib import Path
 from threading import RLock
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from app.deco import Client
 
@@ -32,6 +33,37 @@ CREATE TABLE IF NOT EXISTS windows (
   weekday INTEGER NOT NULL CHECK(weekday >= 0 AND weekday <= 6),
   start_time TEXT NOT NULL, end_time TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS weekly_quotas (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  weekday INTEGER NOT NULL CHECK(weekday BETWEEN 0 AND 6),
+  minutes INTEGER NOT NULL CHECK(minutes BETWEEN 1 AND 1440),
+  PRIMARY KEY (user_id, weekday)
+);
+CREATE TABLE IF NOT EXISTS dns_profiles (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  group_name TEXT NOT NULL,
+  data TEXT NOT NULL,
+  PRIMARY KEY (user_id,group_name)
+);
+CREATE TABLE IF NOT EXISTS dns_devices (
+  mac TEXT PRIMARY KEY REFERENCES devices(mac) ON DELETE CASCADE,
+  client_name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+  data TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS dns_categories (
+  name TEXT PRIMARY KEY,
+  source TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  domains TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS schedule_copies (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  time TEXT NOT NULL,
+  before_json TEXT NOT NULL,
+  after_json TEXT NOT NULL,
+  restored_at TEXT
+);
 CREATE TABLE IF NOT EXISTS minute_samples (
   day TEXT NOT NULL, minute TEXT NOT NULL,
   mac TEXT NOT NULL REFERENCES devices(mac) ON DELETE CASCADE,
@@ -39,6 +71,7 @@ CREATE TABLE IF NOT EXISTS minute_samples (
   PRIMARY KEY (minute, mac)
 );
 CREATE INDEX IF NOT EXISTS ix_sample_mac_day ON minute_samples (mac, day);
+CREATE INDEX IF NOT EXISTS ix_sample_day ON minute_samples (day);
 CREATE TABLE IF NOT EXISTS audit (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   time TEXT NOT NULL, mac TEXT, action TEXT NOT NULL,
@@ -55,17 +88,45 @@ class Store:
         self.lock = RLock()
         with self.lock:
             self.db.executescript(SCHEMA)
-            self.db.commit()
+            with self.db:
+                self.db.execute("BEGIN IMMEDIATE")
+                migrations = {
+                    "users": {
+                        "avatar": "TEXT NOT NULL DEFAULT ''",
+                        "description": "TEXT NOT NULL DEFAULT ''",
+                        "age_band": "TEXT NOT NULL DEFAULT ''",
+                        "override_until": "TEXT",
+                    },
+                    "devices": {
+                        "profile_exempt": "INTEGER NOT NULL DEFAULT 0",
+                        "last_online": "TEXT",
+                    },
+                    "windows": {
+                        "kind": "TEXT NOT NULL DEFAULT 'offtime'",
+                        "label": "TEXT NOT NULL DEFAULT ''",
+                        "enabled": "INTEGER NOT NULL DEFAULT 1",
+                        "days_mask": "INTEGER",
+                        "paused_until": "TEXT",
+                    },
+                }
+                for table, columns in migrations.items():
+                    existing = {row["name"] for row in self.db.execute(f"PRAGMA table_info({table})")}
+                    for name, definition in columns.items():
+                        if name not in existing:
+                            self.db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+                            if name == "last_online":
+                                self.db.execute("""UPDATE devices SET last_online=(
+                                    SELECT substr(MAX(minute),1,16) || ':00+00:00'
+                                    FROM minute_samples WHERE mac=devices.mac
+                                )""")
 
     def query(self, sql: str, args: tuple = ()) -> list[dict]:
         with self.lock:
             return [dict(r) for r in self.db.execute(sql, args).fetchall()]
 
     def execute(self, sql: str, args: tuple = ()) -> int:
-        with self.lock:
-            cur = self.db.execute(sql, args)
-            self.db.commit()
-            return cur.lastrowid
+        with self.lock, self.db:
+            return self.db.execute(sql, args).lastrowid
 
     def users(self) -> list[dict]:
         return self.query("SELECT * FROM users ORDER BY name")
@@ -87,15 +148,24 @@ class Store:
         self.execute("INSERT INTO audit(time,mac,action,status,detail) VALUES (?,?,?,?,?)", (
             datetime.now().astimezone().isoformat(timespec="seconds"), mac, action, status, detail[:300]))
 
+    @contextmanager
+    def policy_change(self, action: str, detail: str):
+        with self.lock, self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            yield self.db
+            self.db.execute("INSERT INTO audit(time,action,status,detail) VALUES (?,?,?,?)",
+                            (datetime.now(timezone.utc).isoformat(), action, "salvata", detail))
+
     def record_inventory(self, clients: list[Client], seen_at: str, local_day: str, minute: str):
         with self.lock, self.db:
             # Devices omitted from a successful snapshot keep their assignments and history.
             self.db.execute("UPDATE devices SET online=0 WHERE online=1")
-            self.db.executemany("""INSERT INTO devices(mac,name,ip,online,client_type,last_seen)
-              VALUES(?,?,?,?,?,?) ON CONFLICT(mac) DO UPDATE SET
+            self.db.executemany("""INSERT INTO devices(mac,name,ip,online,client_type,last_seen,last_online)
+              VALUES(?,?,?,?,?,?,?) ON CONFLICT(mac) DO UPDATE SET
               name=excluded.name, ip=excluded.ip, online=excluded.online,
-              client_type=excluded.client_type, last_seen=excluded.last_seen""",
-                ((c.mac, c.name, c.ip, int(c.online), c.client_type, seen_at) for c in clients))
+              client_type=excluded.client_type, last_seen=excluded.last_seen,
+              last_online=COALESCE(excluded.last_online,devices.last_online)""",
+                ((c.mac, c.name, c.ip, int(c.online), c.client_type, seen_at, seen_at if c.online else None) for c in clients))
             self.db.executemany("""INSERT INTO minute_samples(day,minute,mac,up_kbs,down_kbs)
               VALUES(?,?,?,?,?) ON CONFLICT(minute,mac) DO UPDATE SET
               up_kbs=excluded.up_kbs,down_kbs=excluded.down_kbs""",
@@ -110,16 +180,44 @@ class Store:
         return {"devices": {x["mac"]: x["minutes"] for x in individual},
                 "users": {x["user_id"]: x["minutes"] for x in collective}}
 
+    def usage_report(self, start: date, end: date, *, user_id: int | None = None,
+                     mac: str | None = None) -> tuple[list[dict], list[dict]]:
+        where = ["s.day BETWEEN ? AND ?"]
+        args = [start.isoformat(), end.isoformat()]
+        if user_id is not None:
+            where.append("d.user_id=?")
+            args.append(user_id)
+        if mac is not None:
+            where.append("d.mac=?")
+            args.append(mac)
+        scope = " AND ".join(where)
+        with self.lock:
+            devices = self.query(f"""SELECT day, d.user_id, d.mac, COUNT(*) AS minutes,
+              COUNT(up_kbs) AS up_samples, COUNT(down_kbs) AS down_samples,
+              ROUND(AVG(up_kbs), 1) AS average_up_kbs,
+              ROUND(AVG(down_kbs), 1) AS average_down_kbs,
+              MAX(up_kbs) AS max_up_kbs, MAX(down_kbs) AS max_down_kbs
+              FROM minute_samples s JOIN devices d USING(mac) WHERE {scope}
+              GROUP BY day, d.user_id, d.mac ORDER BY day DESC, d.mac""", tuple(args))
+            profiles = self.query(f"""SELECT day, d.user_id, COUNT(DISTINCT s.minute) AS minutes
+              FROM minute_samples s JOIN devices d USING(mac) WHERE {scope} AND d.user_id IS NOT NULL
+              GROUP BY day, d.user_id ORDER BY day DESC, d.user_id""", tuple(args))
+        return devices, profiles
+
     def daily_usage(self, days: int = 7, *, today: date | None = None) -> list[dict]:
         today = today or date.today()
-        first_day = today - timedelta(days=days - 1)
-        return self.query("""SELECT day, d.user_id, d.mac, COUNT(*) AS minutes,
-          ROUND(AVG(up_kbs), 1) AS average_up_kbs,
-          ROUND(AVG(down_kbs), 1) AS average_down_kbs,
-          MAX(up_kbs) AS max_up_kbs, MAX(down_kbs) AS max_down_kbs
-          FROM minute_samples s JOIN devices d USING(mac)
-          WHERE day BETWEEN ? AND ?
-          GROUP BY day, d.user_id, d.mac ORDER BY day DESC""", (first_day.isoformat(), today.isoformat()))
+        devices, _ = self.usage_report(today - timedelta(days=days - 1), today)
+        return devices
+
+    def prune_samples(self, days: int, today: str):
+        first_day = date.fromisoformat(today) - timedelta(days=days - 1)
+        self.execute("DELETE FROM minute_samples WHERE day<?", (first_day.isoformat(),))
+
+    def clear_samples(self, through: date | None = None) -> int:
+        with self.policy_change("cancellazione_campioni", "") as db:
+            if through is None:
+                return db.execute("DELETE FROM minute_samples").rowcount
+            return db.execute("DELETE FROM minute_samples WHERE day<=?", (through.isoformat(),)).rowcount
 
     def close(self):
         with self.lock:

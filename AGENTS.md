@@ -11,3 +11,7 @@ Read `PRD.md`, `README.md`, and `CODEX_START.md` before changing code.
 - Any change to limits or schedules requires isolated deterministic tests (incl. DST and midnight), rollback and protected management devices.
 - Run `pytest -q`, include tests with changes, and make small reviewable commits.
 - Start with read-only X50 capability checks and user-visible diagnostics. If unsupported, report limitations without pretending that paid features are unlocked.
+- Keep Home Assistant Ingress admin-only and the real Deco adapter read-only in the add-on. Local policy edits and DNS export must work without any device write.
+- Retain legacy SQLite samples and assignments during schema upgrades. Exercise migration and restart with a real temporary database file.
+- Treat AdGuard Home as an external, optional runtime. Export only explicit named-client rules, exclude protected devices, and distinguish local configuration from verified DNS responses. Keep scheduled service previews out of permanent exports.
+- Weekly quotas are configuration only. Legacy sampled-presence quota enforcement is restricted to mock mode.

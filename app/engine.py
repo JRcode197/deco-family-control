@@ -6,7 +6,7 @@ from time import monotonic
 from zoneinfo import ZoneInfo
 from app.deco import Adapter, Client, HomeAssistantGuardActuator
 from app.diagnostics import Diagnostics, PROBE_INTERVAL_SECONDS, ProbeCooldown
-from app.policy import local_day, policy_reason, schedule_active
+from app.policy import device_reason, local_day, pending, policy_reason, profile_reason
 
 log = logging.getLogger(__name__)
 
@@ -23,6 +23,8 @@ class Engine:
         self.diagnostics = Diagnostics(mode=settings.mode)
         self._next_probe = 0.0
         self._last_probe_used_server_settings = True
+        self.presence_quota_simulation = settings.mode == "mock" and settings.quota_enforcement
+        self._retention_day = None
 
     def probe_diagnostics(self, adapter: Adapter | None = None) -> Diagnostics:
         with self.lock:
@@ -40,11 +42,17 @@ class Engine:
     def poll(self, now: datetime | None = None) -> dict:
         with self.lock:
             try:
+                zone = ZoneInfo(self.settings.timezone)
+                day = local_day(now or datetime.now(zone), self.settings.timezone)
+                if self.settings.retention_days and day != self._retention_day:
+                    self.store.prune_samples(self.settings.retention_days, day)
+                    self._retention_day = day
                 clients = self.adapter.clients()
-                now = now or datetime.now(ZoneInfo(self.settings.timezone))
+                now = now or datetime.now(zone)
+                day = local_day(now, self.settings.timezone)
                 minute = now.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%MZ")
                 with self.store.lock:
-                    self.store.record_inventory(clients, now.isoformat(), local_day(now, self.settings.timezone), minute)
+                    self.store.record_inventory(clients, now.isoformat(), day, minute)
                     self.last_poll = now.isoformat()
                     self.last_sample_minute = minute
                     self.last_error = ""
@@ -59,42 +67,49 @@ class Engine:
     def enforce(self, now: datetime | None = None) -> list[dict]:
         with self.lock:
             now = now or datetime.now(ZoneInfo(self.settings.timezone))
-            users = {u["id"]: u for u in self.store.users()}
-            windows = self.store.windows()
-            usage = self.store.usage(local_day(now, self.settings.timezone))
+            now = now.astimezone(ZoneInfo(self.settings.timezone))
+            with self.store.lock:
+                users = self.store.users()
+                windows = self.store.windows()
+                devices = self.store.devices()
+                usage = self.store.usage(local_day(now, self.settings.timezone)) if self.presence_quota_simulation else {}
+            reasons = {}
+            for user in users:
+                user_id = user["id"]
+                rules = [w for w in windows if w["user_id"] == user_id]
+                reason = profile_reason(now, user, rules)
+                if not reason and self.presence_quota_simulation and not pending(now, user["override_until"]):
+                    reason = policy_reason(
+                        manually_blocked=False, scheduled=False, quota_enforcement=True,
+                        observed_minutes=usage["users"].get(user_id, 0), quota_minutes=user["quota_minutes"],
+                    )
+                reasons[user_id] = reason
+            mock_blocks = (self.adapter.blocked_macs()
+                           if self.settings.mode == "mock" and self.settings.writes_enabled else None)
             actions = []
-            for d in self.store.devices():
-                if d["mac"] in self.settings.protected_macs:
+            for device in devices:
+                mac = device["mac"]
+                if mac in self.settings.protected_macs:
                     continue
-                u = users.get(d["user_id"])
-                user_windows = [w for w in windows if w["user_id"] == d["user_id"]] if u else []
-                quota_hit = bool(u and self.settings.quota_enforcement and
-                                 u["quota_minutes"] is not None and
-                                 usage["users"].get(u["id"], 0) >= u["quota_minutes"])
-                device_quota_hit = bool(self.settings.quota_enforcement and
-                                        d["quota_minutes"] is not None and
-                                        usage["devices"].get(d["mac"], 0) >= d["quota_minutes"])
-                reason = policy_reason(
-                    manually_blocked=bool(d["manually_blocked"] or (u and u["manually_blocked"])),
-                    scheduled=bool(u and schedule_active(now, user_windows)),
-                    observed_minutes=1 if quota_hit or device_quota_hit else 0,
-                    quota_minutes=1 if quota_hit or device_quota_hit else None,
-                    quota_enforcement=self.settings.quota_enforcement,
-                )
-                if reason and not d["managed_block"]:
-                    actions.append(self._act(d, True, reason))
-                elif not reason and d["managed_block"]:
-                    actions.append(self._act(d, False, "revoca_regola"))
+                reason = device_reason(device, reasons.get(device["user_id"]))
+                if not reason and self.presence_quota_simulation:
+                    reason = policy_reason(
+                        manually_blocked=False, scheduled=False, quota_enforcement=True,
+                        observed_minutes=usage["devices"].get(mac, 0), quota_minutes=device["quota_minutes"],
+                    )
+                currently_blocked = mac in mock_blocks if mock_blocks is not None else bool(device["managed_block"])
+                if bool(reason) != currently_blocked:
+                    actions.append(self._act(device, bool(reason), reason or "revoca_regola"))
             return actions
 
     def _act(self, device: dict, should_block: bool, reason: str) -> dict:
         mac = device["mac"]
-        if not self.settings.writes_enabled:
+        if self.settings.ha_ingress or not self.settings.writes_enabled:
             return {"mac": mac, "action": "block" if should_block else "unblock",
                     "status": "anteprima_senza_modifiche", "reason": reason}
         c = Client(mac, device["name"], device["ip"], bool(device["online"]), device["client_type"])
         try:
-            if self.settings.actuator == "ha_guard":
+            if self.settings.mode == "deco" and self.settings.actuator == "ha_guard":
                 service = HomeAssistantGuardActuator(self.settings.ha_url, self.settings.ha_token)
                 status = service.call("block_device" if should_block else "unblock_device", c)
             else:

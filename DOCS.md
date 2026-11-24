@@ -1,10 +1,81 @@
-## Inventario Deco X50 da Home Assistant
+# Deco Family Control 0.3.0
 
-1. Installa o aggiorna **Deco Family Control** dallo store di Home Assistant. Se l'aggiornamento non compare, apri lo store e scegli **⋮ → Controlla aggiornamenti**. Apri la scheda dell'app e tocca **Aggiorna**. La versione mostrata sotto il titolo della dashboard è quella effettivamente in esecuzione.
-2. Nella scheda **Configurazione** dell'app, imposta `deco_ip`, `deco_username` (di solito `admin`) e `deco_password` con i dati che hanno funzionato nella diagnostica. Fino alla versione 0.2.1, il campo password può comparire solo dopo aver mostrato le opzioni facoltative. Attiva `inventory_enabled`, salva e riavvia l'app. Dalla 0.2.2, **Configurazione richiesta** segnala il campo da completare se le impostazioni salvate sono incomplete.
-3. Tocca **Apri interfaccia web** dalla sessione amministratore di Home Assistant. In **Persone**, crea i profili. In **Dispositivi**, cerca un nome, un IP o un MAC e scegli la persona accanto al dispositivo. L'assegnazione viene salvata subito. Scegli **Nessuna persona** per rimuoverla.
-4. L'app legge il Deco ogni minuto. **Leggi dal Deco** interroga il router subito. L'elenco principale mostra i dispositivi restituiti dall'ultima lettura riuscita, con data, ora e numero di dispositivi online. I dispositivi assenti restano in **Rilevati in precedenza** con le rispettive assegnazioni. Dopo un errore di lettura, i dati disponibili compaiono in quella sezione fino alla prossima lettura riuscita. Il riepilogo mostra campioni di presenza Wi-Fi e velocità istantanee in KB/s. La presenza giornaliera per persona usa le assegnazioni attuali e conta una sola volta ciascun minuto in cui almeno un suo dispositivo è stato osservato online.
+## Installare o aggiornare l’app Home Assistant
 
-La configurazione dell'inventario viene letta all'avvio dalle opzioni amministratore di Home Assistant. La password non viene copiata in SQLite. Il database reale, con profili, assegnazioni e storico, risiede nel volume dell'app in `/data/inventory` e sopravvive a riavvii e aggiornamenti. I profili creati nella simulazione sono temporanei. L'inventario reale mantiene il Deco in sola lettura.
+1. In Home Assistant apri **Impostazioni → App → Store delle app**. Per una nuova installazione aggiungi `https://github.com/JRcode197/deco-family-control` a **⋮ → Repository**, installa **Deco Family Control** e avvialo. Se l’app è già installata, crea un backup Home Assistant che la includa, poi usa **⋮ → Controlla aggiornamenti** e **Aggiorna** dalla scheda dell’app.
+2. Apri **Configurazione**. Per leggere l’inventario reale, attiva `inventory_enabled`, inserisci `deco_ip`, `deco_username` (di solito `admin`) e `deco_password`, salva e riavvia. Riusa i dati che hanno funzionato nella diagnostica. Su X50 l’username può essere `admin` anche quando la pagina web mostra solo il campo password.
+3. In `protected_macs` puoi indicare, separati da virgole, i MAC dell’host Home Assistant, degli apparati di rete e dei dispositivi amministrativi. Usa `retention_days` per conservare i campioni degli ultimi N giorni locali, incluso oggi. Il valore `0` conserva tutti i campioni già presenti e quelli futuri. Salva e riavvia dopo aver cambiato le opzioni.
+4. Apri **Interfaccia web** dalla sessione amministratore. Controlla la versione accanto al titolo. In **Dispositivi** premi **Leggi dal Deco**. Se la configurazione è incompleta l’app indica l’opzione da correggere e mantiene aperta la dashboard.
 
-**Diagnostica Deco X50** permette di riprovare le letture e copiare **Risultato JSON**. **Usa configurazione del server** riutilizza la configurazione dell'app. Il modulo è disponibile per un tentativo separato. Condividi soltanto il report redatto. Conserva al sicuro i backup di Home Assistant che includono i dati e le opzioni dell'app.
+SQLite risiede in `/data/inventory/family.sqlite3` quando l’inventario reale è abilitato. L’aggiornamento aggiunge tabelle e colonne, conservando profili, associazioni e campioni. Le fasce precedenti sono classificate come Offtime. La simulazione di Home Assistant usa un database temporaneo separato. I backup possono contenere configurazioni protette e dati familiari. Conservali in locale o in una destinazione protetta.
+
+L’app usa solo Ingress, con accesso amministratore, senza esporre porte per la dashboard. La password Deco resta nelle opzioni protette e non viene copiata in SQLite. Per la variante Docker autonoma, usa la [procedura del README](README.md#quickstart-safe-simulation).
+
+## Persone, regole e precedenze
+
+1. In **Persone**, crea un profilo e scegli **Apri profilo**. Modifica avatar, descrizione e fascia d’età in **Configurazione profilo**.
+2. In **Dispositivi associati**, scegli i dispositivi da assegnare. Puoi assegnarli o spostarli anche dalla vista generale. I dispositivi sono riconosciuti per MAC anche se l’IP cambia. Su iOS puoi usare l’indirizzo Wi-Fi privato fisso per il tuo SSID. Un cambio di MAC risulta come un nuovo dispositivo.
+3. Nel profilo apri **Offtime** o **Bedtime**, scegli un modello o imposta più giorni e orari. I giorni selezionati sono quelli di inizio. Per esempio, il Bedtime del venerdì 20:30–07:00 finisce sabato alle 07:00. Ogni fascia può essere modificata, disattivata o sospesa.
+4. Usa **Blocca ora**, **Sblocca ora**, **Consenti 15/30/60 min** oppure indica un orario di fine. L’anteprima distingue la disponibilità prevista dal risultato di un blocco fisico. Il selettore di fine usa l’orario del dispositivo da cui navighi. Le fasce e le proiezioni usano Europe/Rome per impostazione predefinita.
+5. In **Copia da un altro profilo**, scegli il profilo sorgente e i gruppi desiderati. Controlla le regole attuali e quelle risultanti, quindi conferma. La copia riguarda fasce, quote o impostazioni web e servizi selezionati. I collegamenti DNS dei singoli dispositivi, le assegnazioni e gli override del profilo sono esclusi. Per tornare alla configurazione precedente, apri **Storico delle copie** e usa **Ripristina configurazione precedente**. Se nel frattempo le regole interessate sono cambiate, l’operazione si ferma per evitare sovrascritture.
+
+Per le regole Internet, i dispositivi protetti sono esclusi per primi. Un blocco individuale ha precedenza. Su un dispositivo con deroga, le regole del profilo non si applicano. Sugli altri, una sospensione del profilo mette in pausa blocco manuale e fasce, poi riprendono il blocco manuale, Bedtime e Offtime in quest’ordine. **Blocca ora** annulla la sospensione. **Sblocca ora** rimuove il blocco manuale del profilo e sospende le fasce già attive fino alla fine dell’intervallo combinato, al massimo per 24 ore. **Ripristina programmazione** fa scadere la sospensione immediatamente.
+
+Il motore considera gli intervalli con inizio incluso e fine esclusa. Due fasce sovrapposte producono un solo intervallo di indisponibilità. Nell’ora mancante di primavera valgono gli orari effettivamente attraversati dall’orologio locale. Nell’ora ripetuta di autunno una fascia può attivarsi in entrambe le occorrenze. Le sospensioni scadono all’istante UTC salvato e si mantengono dopo il riavvio.
+
+## DNS opzionale con AdGuard Home
+
+Questa configurazione è indipendente dal Deco. L’app salva le impostazioni ed esporta testo. AdGuard Home si installa e si gestisce separatamente. La rete domestica può continuare a usare la configurazione attuale senza eseguire questi passaggi.
+
+1. Configura un client persistente in AdGuard Home con un nome univoco semplice, per esempio `alice-iphone`. Associa l’IP riservato o un identificativo che AdGuard Home possa effettivamente riconoscere, e prova inizialmente solo con un dispositivo non essenziale. Il resolver deve vedere il client individuale. Se riceve tutte le richieste sotto il nome o l’IP del router, il filtro per nome non si applica ai singoli dispositivi. [Client persistenti](https://github.com/AdguardTeam/AdGuardHome/wiki/Clients)
+2. In **Protezione web e applicazioni** del profilo, compila domini, eccezioni e impostazioni di ricerca. Configura **Collegamenti ed eccezioni per dispositivo** con il nome esatto del client persistente. La configurazione segue il MAC quando cambia IP. Se cambia l’identità rilevata dal resolver, aggiorna il client persistente in AdGuard Home.
+3. Le categorie usano liste importate dall’amministratore, senza download automatici. Usa un dominio per riga, anche in formato IDN. Sono ammessi commenti con `#` a inizio riga. Salva la fonte e, quando disponibile, la versione o la data del file. Per aggiornare o ritirare una lista, sostituiscila o rimuovila e rigenera l’esportazione. Per partire da una fonte mantenuta, valuta il file host di URLhaus per i domini malevoli e la lista NSFW di OISD per contenuti per adulti, convertendo i dati al formato richiesto e verificandone licenza e copertura. [URLhaus](https://urlhaus.abuse.ch/api/) · [OISD](https://oisd.nl/)
+4. Genera le regole e incolla il blocco tra `BEGIN Deco Family Control` ed `END Deco Family Control` in **Filtri → Regole di filtraggio personalizzate**. Sostituisci il blocco precedente come unità e conserva gli altri filtri. Ripeti l’esportazione dopo ogni cambio di configurazione, assegnazione o protezione. Per annullare, rimuovi il blocco esportato. [Sintassi delle regole AdGuard Home](https://github.com/AdguardTeam/AdGuardHome/wiki/Hosts-Blocklists)
+5. Verifica dal client di prova con una richiesta DNS nuova. Controlla una risposta di blocco per un dominio di prova e una risposta consentita per un’eccezione. Ripeti da un secondo client non associato, sul quale il dominio di prova deve restare risolvibile. In caso di falso positivo, aggiungi la sola eccezione necessaria e sostituisci il blocco esportato. Se l’applicazione è incerta, controlla stato filtraggio, nome del client, resolver IPv4 e IPv6 e cache DNS. Il registro DNS è facoltativo e rimane in AdGuard Home. Deco Family Control non raccoglie query o cronologia di navigazione. La sintassi esportata è stata verificata con AdGuard Home v1.0.0 in loopback, usando due client di prova e un resolver simulato.
+
+**SafeSearch e Restricted Mode.** SafeSearch genera riscritture CNAME per `www.google.com`, `www.google.it` e `www.bing.com`. YouTube usa i domini indicati da Google con destinazione moderata o restrittiva. Verifica le risposte dal dispositivo di prova. Per YouTube controlla anche l’effetto nell’app o nel browser. La risoluzione corretta dimostra la configurazione DNS per quel client. Altri domini regionali, motori diversi, connessioni già aperte, DNS cifrato, VPN e rete cellulare possono restare fuori da questa copertura. [SafeSearch di Google](https://support.google.com/websearch/answer/186669) · [Restrizioni di rete YouTube](https://support.google.com/a/answer/6214622) · [Supporto SafeSearch di AdGuard Home](https://github.com/AdguardTeam/AdGuardHome/wiki/Configuration#safesearch)
+
+| Ambiente | Prova sul client |
+| --- | --- |
+| Safari su iPhone o iPad | Verifica che la richiesta raggiunga il resolver previsto. Controlla la modalità YouTube nel browser e la ricerca sui domini configurati. |
+| App YouTube su iPhone o iPad | Verifica anche i domini API. Ripeti dopo aver chiuso e riaperto l’app, con rete cellulare esclusa per la prova. |
+| Smart TV | Controlla separatamente il DNS effettivo della TV e il comportamento della sua app YouTube. |
+| Android e Windows | Verifica browser e app separatamente. Controlla la configurazione del DNS privato o sicuro del dispositivo e del browser. |
+
+**Servizi.** Il catalogo mostra i domini coperti. Un’eccezione DNS prevale sui blocchi corrispondenti in questa configurazione. Le regole DNS valgono per risoluzioni di nomi e per i dispositivi che usano il resolver. Un servizio consentito via DNS richiede comunque una connessione Internet disponibile. Le fasce per servizio vengono valutate nella dashboard. L’esportazione manuale contiene solo regole permanenti, così una fascia temporanea non rimane attiva indefinitamente.
+
+## Statistiche e privacy
+
+- **Ultima presenza online** è l’ultimo campione che indicava il dispositivo online. L’inventario può includere client Wi-Fi e cablati. Lo stato online in tempo reale è rappresentato dall’ultima lettura riuscita. Durante un errore, l’app segnala lo stato precedente come non aggiornato.
+- **Presenza campionata** conta i minuti UTC con almeno un’osservazione online. Un profilo conta una sola volta il minuto anche con più dispositivi, in base alle assegnazioni attuali. I giorni sono raggruppati nel fuso locale. Intervalli senza osservazioni restano assenti.
+- **Velocità media e massima** usano i valori istantanei in KB/s restituiti dal Deco. La tabella mostra quanti campioni hanno quel valore. Un campione esplicitamente pari a zero è distinto da un valore assente. Le medie non forniscono il volume trasferito. Tempo attivo Internet, tempo di utilizzo per app e tempo-schermo restano indisponibili.
+- In **Statistiche della rete**, scegli periodo, persona e dispositivo. **Conservazione dei campioni** permette di eliminare i campioni fino a una data inclusa o eliminare l’intero storico campionato. Restano inventario, regole, ultimo stato e registro delle operazioni.
+- Le **Quote Internet** memorizzano gli obiettivi per giorno. Il tempo di presenza e le velocità campionate non vengono usati per bloccare automaticamente la rete reale.
+
+## Collaudo fisico Deco X50
+
+Le letture locali sono state riferite per firmware **1.11.1 Build 26081714 Rel. 32981**, con 33 client e campioni di velocità. Questa procedura resta da eseguire sulla rete di casa per confermare l’attuatore scelto.
+
+1. Usa **Diagnostica Deco X50 → Usa configurazione del server**. Controlla inventario, firmware e lettura della lista blocchi. Per condividere un risultato usa il JSON redatto. Le credenziali, la pagina dell’inventario e le copie del database sono dati privati.
+2. Predisponi un dispositivo Wi-Fi non essenziale con MAC stabile e un percorso amministrativo indipendente. Escludi rete cellulare e altre connessioni di riserva sul dispositivo di prova. Identifica e proteggi i MAC di Home Assistant, nodi Deco e client amministrativi. Verifica inizialmente su entrambi i dispositivi una richiesta HTTPS nuova e, se disponibile, la connettività IPv6.
+3. Tieni l’add-on in sola lettura. Prova prima blocco e ripristino del solo dispositivo di prova dai controlli nativi del Deco, in modo da conoscere il percorso di recupero. Per valutare il comando SDK serve una prova locale separata ed esplicitamente autorizzata, usando la variante autonoma, un database di prova senza profili o regole familiari e il solo dispositivo selezionato.
+4. Per l’attuatore in prova, registra separatamente se il comando è accettato o se cambia la lista blocchi. Verifica sul dispositivo di prova che più richieste HTTPS nuove falliscano e che il dispositivo amministrativo rimanga online. Usa un nuovo tentativo IPv4 e IPv6 ove disponibile. Il cambio di stato della lista blocchi da solo non è evidenza di perdita di Internet.
+5. Rimuovi il blocco e verifica che le richieste riescano di nuovo. Se il ripristino tramite attuatore non riesce, rimuovi l’elemento dai controlli nativi usando il dispositivo amministrativo. Conserva il risultato prima/durante/dopo e l’esito dell’accesso amministrativo. Il risultato si riferisce al firmware, al canale e all’attuatore provati. Ripeti dopo cambi di firmware o attuatore.
+
+## Matrice delle funzionalità
+
+| Funzionalità | Stato | Copertura rispetto a HomeShield Advanced |
+| --- | --- | --- |
+| Profili, inventario X50, assegnazioni e protezione amministrativa | Implementata | Profili locali indipendenti dai profili nativi. Inventario in sola lettura. |
+| Template, copia selettiva e ripristino | Implementata | Copia locale per gruppi, con confronto e storico. |
+| Offtime, Bedtime, blocco manuale e sblocchi temporanei | Implementata in anteprima | Decisioni e scadenze persistenti, con previsione delle transizioni. |
+| Blocco e ripristino effettivi tramite Deco | Da verificare fisicamente | Nessuna equivalenza con una funzione nativa dichiarata prima della prova X50. |
+| Siti bloccati, eccezioni e filtri per categoria | Parziale | Liste locali ed esportazione DNS opzionale per client. Applicazione manuale e copertura limitata al resolver. |
+| SafeSearch e YouTube Restricted | Parziale | Riscritture per i domini documentati. Il comportamento delle app e dei browser richiede verifica sulla LAN. |
+| Servizi bloccati o sempre consentiti | Parziale | Domini del catalogo ed eccezioni DNS. Anteprima delle fasce. Il blocco totale Internet resta indipendente. |
+| App Time Limits e uso per singola app | Non supportata | Il Deco non fornisce una misura validata di sessioni o tempo d’uso per app in questa integrazione. |
+| Quote Internet giornaliere | Parziale | Obiettivi per giorno e fuso locale. Applicazione automatica in attesa di telemetria adeguata. |
+| Statistiche di presenza, velocità e storico | Implementata | Campioni e diagnosi della copertura. Grafici, filtri e retention locale. |
+| Byte trasferiti, classificazione dei video e cronologia siti | Non supportata | Contatori e sorgenti adatti non disponibili nella versione corrente. |
+
+L’app resta locale, gratuita e indipendente da HomeShield. AdGuard Home e l’eventuale Deco Guard sono componenti esterni con licenze proprie.

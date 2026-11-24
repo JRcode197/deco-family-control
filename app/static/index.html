@@ -1,37 +1,72 @@
 <!doctype html>
-<html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Deco Family Control</title>
 <style>
-:root{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color-scheme:dark;background:#10161d;color:#f4f6f9}
-*{box-sizing:border-box}body{margin:0}header{background:#18242d;padding:22px max(20px,calc((100vw - 1050px)/2));border-bottom:1px solid #3a4a55}h1{font-size:1.5rem;margin:0}h2{font-size:1.1rem;margin:0 0 14px}header p,.muted{color:#aabac6}
-main{max-width:1050px;margin:auto;padding:18px;display:grid;gap:14px}.cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-.panel{min-width:0;padding:18px;background:#1b2832;border:1px solid #354955;border-radius:16px}.item{padding:12px 0;border-top:1px solid #354955;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}.item:first-child{border:0}.item small{display:block;color:#b7c5cd}
-form,.control{display:flex;flex-wrap:wrap;gap:8px}form{margin-bottom:12px}button,input,select{font:inherit;padding:10px;border-radius:9px;border:1px solid #526776;background:#263944;color:white;max-width:100%;min-width:0}input{width:135px}button{background:#087f95;cursor:pointer}button.danger{background:#a34149;border-color:#b85b61}button.subtle{background:#29404f}button:disabled{opacity:.5}label{font-size:.84rem}.flag{display:inline-block;border-radius:99px;padding:5px 10px;margin:6px 8px 0 0;background:#354c5c;font-size:.83rem}.safe{background:#174d41;color:#a3e9cb}.warning{background:#573724;color:#ffe0b2}.notice{font-size:.88rem;line-height:1.5;color:#bed0d9}.error{color:#ffaaaa}.success{color:#9de6c7}#message{min-height:24px;margin:0}table{width:100%;border-collapse:collapse;font-size:.83rem}td,th{border-bottom:1px solid #314452;padding:8px;text-align:left}a{color:#7ad7e9}.tablewrap{overflow-x:auto}
-.diagnostic-form{align-items:end;gap:12px}.diagnostic-form label{display:grid;gap:4px}.diagnostic-form input{width:185px}
-.inventory-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.inventory-tools input{width:200px}
-#release{display:block;margin-top:4px}#previous-devices{margin-top:12px}#previous-devices summary{cursor:pointer;color:#aabac6;font-size:.9rem}
-@media(max-width:740px){.cols{grid-template-columns:1fr}header{padding:18px}.panel{padding:14px}}
-</style></head><body>
-<header><h1>🛡 Deco Family Control</h1><small id="release" class="muted"></small><p>TP-Link Deco X50 · controllo parentale locale</p><div id="badges"></div></header>
-<main><p id="message" aria-live="polite"></p>
-<div class="cols">
-<section class="panel"><h2>Persone</h2><form id="add-user"><input id="user-name" aria-label="Nome della persona" placeholder="Alice o Anna" maxlength="60" required><button>Crea profilo</button></form><div id="users"></div></section>
-<section class="panel"><h2>Dispositivi</h2>
-<div class="inventory-tools"><button class="subtle" id="refresh">Leggi dal Deco</button><input id="device-filter" type="search" aria-label="Cerca dispositivo" placeholder="Cerca dispositivo"></div>
+:root{font-family:system-ui,-apple-system,BlinkMacSystemFont,sans-serif;color-scheme:dark;background:#111c23;color:#f0f6fa;--surface:#1a2933;--line:#38515e;--muted:#b4c7d2;--accent:#9ce3e5;--danger:#ffb6b2}
+*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;min-width:0}header{border-bottom:1px solid var(--line);background:#172732}header>div,main{max-width:1100px;margin:auto;padding:20px clamp(16px,4vw,32px)}
+h1,h2,h3,p{margin-top:0}h1{font-size:clamp(1.5rem,5vw,2rem);margin:0}h2{font-size:1.25rem;margin-bottom:14px}h3{font-size:1rem;margin-bottom:10px}small,.notice,.muted{color:var(--muted)}.notice,small{line-height:1.45}nav,.row,.controls{display:flex;align-items:center;flex-wrap:wrap;gap:8px}nav{margin:20px 0 0}nav a{padding:8px 10px;background:#263d49;border-radius:8px;text-decoration:none}a{color:var(--accent)}
+main{display:grid;gap:16px}.stack{display:grid;gap:14px}.panel,.card{min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:clamp(14px,3vw,22px)}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,270px),1fr));gap:12px}.card{background:#1d333e}.card h3{font-size:1.12rem}.profile-link{display:inline-block;margin-top:12px}.card p{margin:8px 0 12px}.item{padding:12px 0;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}.item small{display:block}.item>div{min-width:0;overflow-wrap:anywhere}.avatar{display:inline-grid;place-items:center;background:#254f57;color:var(--accent);border-radius:12px;width:44px;height:44px;font-size:1.3rem;flex:none}
+form,fieldset{margin:0 0 12px;padding:0;border:0;min-width:0}.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,145px),1fr));align-items:end;gap:10px}.full{grid-column:1/-1}form label{display:grid;gap:5px}label,legend{font-size:.88rem}button,input,select,textarea{font:inherit;color:inherit;max-width:100%;min-width:0;min-height:42px;padding:9px;border:1px solid #53707d;border-radius:8px;background:#203742}textarea{resize:vertical;width:100%}input[type=checkbox]{width:18px;min-height:18px;margin:0;accent-color:#72d4d5}.checks{display:flex;flex-wrap:wrap;gap:8px;margin-top:5px}.checks label{display:flex;align-items:center;flex-direction:row;gap:6px;padding:6px 8px;border:1px solid var(--line);border-radius:8px}
+button{background:#126c77;cursor:pointer}button.subtle{background:#28424f}button.danger{background:#652e36;border-color:#a7555b}button:disabled{opacity:.6;cursor:wait}:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.flag{display:inline-block;padding:4px 9px;border-radius:20px;background:#304a57;font-size:.8rem}.safe{background:#1c4c40;color:#b6ebd6}.warning{background:#573b29;color:#ffe1b9}.error{color:var(--danger)}.success{color:#a1e7c4}#message:empty{display:none}#message{margin:0;position:sticky;top:8px;z-index:1;background:#172732;padding:10px 12px;border-radius:8px}
+summary{cursor:pointer;color:var(--accent);margin-bottom:10px}details:not([open]) summary{margin-bottom:0}details+details{margin-top:12px}.tablewrap{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:.86rem}td,th{padding:8px;text-align:left;border-bottom:1px solid var(--line)}th{color:var(--muted)}pre{white-space:pre-wrap;overflow-wrap:anywhere}
+.chart{display:grid;gap:4px;padding:0;list-style:none}.chart li{display:grid;grid-template-columns:75px minmax(60px,1fr) 58px;align-items:center;gap:6px;font-size:.82rem}.chart meter{width:100%;height:15px;accent-color:var(--accent)}
+</style>
+<script src="dns.js" defer></script>
+<script src="dashboard.js" defer></script>
+</head>
+<body>
+<header><div>
+<h1>Deco Family Control</h1>
+<p id="release" class="notice"></p>
+<div id="badges" class="row"></div>
+<nav aria-label="Navigazione principale">
+<a href="#persone">Persone</a><a href="#dispositivi">Dispositivi</a><a href="#statistiche">Statistiche</a><a href="#deco-diagnostics">Diagnostica</a>
+</nav>
+</div></header>
+<main>
+<p id="message" role="status"></p>
+<div id="overview" class="stack">
+<section id="persone" class="panel">
+<h2>Persone</h2>
+<form id="add-user" class="controls">
+<input id="user-name" aria-label="Nome della persona" placeholder="Nome della persona" maxlength="60" required>
+<button>Crea profilo</button>
+</form>
+<div id="users" class="cards"></div>
+</section>
+<section class="panel" id="dispositivi">
+<h2>Dispositivi</h2>
+<div class="controls"><button class="subtle" id="refresh" type="button">Leggi dal Deco</button>
+<input id="device-filter" type="search" aria-label="Cerca dispositivo" placeholder="Cerca dispositivo"></div>
 <p id="inventory-status" class="notice" aria-live="polite"></p>
-<p class="notice">Scegli una persona accanto al dispositivo. Per gli iPhone usa un indirizzo Wi-Fi privato fisso sul tuo SSID.</p>
-<div id="devices"></div>
+<h3>Senza profilo</h3><div id="unassigned"></div>
+<h3>Assegnati</h3><div id="devices"></div>
 <details id="previous-devices" hidden><summary id="previous-device-count"></summary><div id="device-history"></div></details>
 </section>
-</div>
-<div class="cols">
-<section class="panel" id="policy-panel"><h2>Blocchi programmati</h2>
-<form id="add-window"><select id="window-user" required></select>
-<select id="weekday"><option value="0">Lunedì</option><option value="1">Martedì</option><option value="2">Mercoledì</option><option value="3">Giovedì</option><option value="4">Venerdì</option><option value="5">Sabato</option><option value="6">Domenica</option></select>
-<input type="time" id="start" value="20:30" required><input type="time" id="end" value="07:00" required><button>Aggiungi</button></form><div id="windows"></div>
+<section class="panel" id="statistiche">
+<h2>Statistiche della rete</h2>
+<form id="report-form" class="form-grid">
+<label>Periodo<select id="report-period"><option value="1">Giorno</option><option value="7" selected>Ultimi 7 giorni</option><option value="30">Ultimi 30 giorni</option><option value="custom">Intervallo personalizzato</option></select></label>
+<label>Persona<select id="report-user"></select></label>
+<label>Dispositivo<select id="report-device"></select></label>
+<label class="report-date" hidden>Dal<input type="date" id="report-start"></label>
+<label class="report-date" hidden>Al<input type="date" id="report-end"></label>
+<button>Mostra statistiche</button>
+</form>
+<p class="notice" id="report-source"></p>
+<div id="history"></div>
+<details><summary>Conservazione dei campioni</summary>
+<p class="notice">L’eliminazione riguarda le osservazioni storiche di presenza e velocità. Inventario, configurazioni e registro delle operazioni rimangono disponibili.</p>
+<form id="clear-samples" class="controls">
+<label>Fino al giorno incluso (facoltativo)<input id="clear-through" type="date"></label>
+<button class="danger">Elimina campioni</button>
+</form>
+</details>
 </section>
-<section class="panel"><h2>Riepilogo utilizzo</h2><p class="notice">I minuti misurano la presenza online osservata durante il polling Wi-Fi, non il tempo-schermo o il tempo effettivo di navigazione.</p><div id="usage"></div><h3>Ultimi 7 giorni</h3><div id="history" class="tablewrap"></div></section>
-</div>
 <section class="panel"><h2>Registro delle operazioni</h2><div id="audit" class="tablewrap"></div></section>
 <section class="panel" id="deco-diagnostics"><h2>Diagnostica Deco X50</h2>
 <form id="deco-probe-form" class="diagnostic-form" method="post" autocomplete="off">
@@ -45,136 +80,8 @@ form,.control{display:flex;flex-wrap:wrap;gap:8px}form{margin-bottom:12px}button
 <div id="diagnostic-summary" aria-live="polite"></div>
 <details><summary>Risultato JSON</summary><pre id="diagnostic-json" class="tablewrap"></pre></details>
 <p class="notice">Un blocco è verificato fisicamente solo dopo una prova di perdita e ripristino dell'accesso a Internet su un dispositivo di prova.</p></section>
-<section class="panel"><h2>Funzioni e limiti</h2><p class="notice">La presenza Wi-Fi campionata indica quando un dispositivo risultava connesso. I KB/s sono misure di velocità istantanea campionate. Byte trasferiti, tempo schermo iOS, uso delle app e siti visitati non sono misurati. Le quote automatiche sono spente per impostazione predefinita.</p><p class="notice">Non esporre la dashboard pubblicamente. Usare solo rete locale protetta o VPN privata.</p></section>
+</div>
+<div id="profile" class="stack" hidden></div>
 </main>
-<script>
-"use strict";
-const $=id=>document.getElementById(id);
-let S={};
-function node(tag,text,cls){const e=document.createElement(tag);if(text!==undefined)e.textContent=String(text);if(cls)e.className=cls;return e}
-function add(parent,...children){for(const c of children)parent.appendChild(c)}
-function btn(label,click,cls){const e=node("button",label,cls||"subtle");e.type="button";e.onclick=click;return e}
-function drop(options,value,click){const e=node("select");for(const o of options){const x=node("option",o.label);x.value=o.value;e.appendChild(x)}e.value=value===null?"":String(value);e.onchange=()=>click(e.value);return e}
-async function api(path,method="GET",data){const o={method,headers:{"X-Family-Action":"1"}};if(data!==undefined){o.headers["Content-Type"]="application/json";o.body=JSON.stringify(data)}
- const r=await fetch("api/"+path,o);let v;try{v=await r.json()}catch{v={detail:"Risposta non valida"}}if(!r.ok)throw Error(v.detail||"HTTP "+r.status);return v}
-function msg(text,err){$("message").textContent=text;$("message").className=err?"error":"success"}
-const successMessages={users:"Profilo creato.",assign:"Assegnazione salvata.",refresh:"Lettura completata."};
-async function execute(path,data,method="POST"){try{const v=await api(path,method,data);const errs=(v.actions||[]).filter(a=>a.status==="errore");msg(errs.length?"Comando fallito: consulta il registro":successMessages[path]||"Operazione registrata.",!!errs.length);await refresh()}catch(e){if(path==="assign"||path==="refresh")await refresh();msg(e.message,true)}}
-async function refresh(){try{S=await api("state");render();const h=await api("usage?days=7");history(h.data)}catch(e){msg(e.message,true)}}
-const diagnosticLabels = {
- not_checked: "Da verificare", simulated: "Simulato", read_only_detected: "Rilevato in sola lettura",
- not_supported: "Non supportato", not_reported: "Dato non restituito", sdk_unavailable: "SDK non disponibile",
- temporary_error: "Errore temporaneo", read_error: "Risposta non utilizzabile",
- authentication_failed: "Accesso API locale rifiutato: verifica admin + password del TP-Link ID proprietario. Se la pagina web funziona, potrebbe esserci un problema di protocollo o sessione. Evita tentativi ripetuti.",
- not_verified: "Da verificare fisicamente"
-};
-async function loadDiagnostics(method="GET", credentials){
- const buttons=[$("probe"),$("probe-deco")], summary=$("diagnostic-summary");
- for(const button of buttons)button.disabled=true;
- if(method==="POST"){
-  summary.textContent="Verifica in corso…";
-  $("diagnostic-json").textContent="";
- }
- try{
-  const report=await api(credentials?"diagnostics/deco":"diagnostics",method,credentials);
-  const rows=[
-   ["Sessione Deco", diagnosticLabels[report.connection]],
-   ["Inventario", diagnosticLabels[report.inventory.status]+(report.inventory.count===null?"":" · "+report.inventory.count+" dispositivi")],
-   ["Firmware", [report.model,report.firmware_version,diagnosticLabels[report.firmware.status]].filter(Boolean).join(" · ")],
-   ["Lista blocchi", diagnosticLabels[report.blocklist.status]+(report.blocklist.count===null?"":" · "+report.blocklist.count+" voci")],
-   ["Velocità campionate (KB/s)", diagnosticLabels[report.speed_samples]],
-   ["Blocco Internet", diagnosticLabels[report.enforcement]]
-  ];
-  const list=node("ul");
-  for(const [label,value] of rows)list.append(node("li",label+": "+value));
-  summary.replaceChildren(list);
-  if(report.checked_at)summary.append(node("p","Ultima verifica: "+new Date(report.checked_at).toLocaleString()+" · Al massimo una verifica al minuto.","notice"));
-  $("diagnostic-json").textContent=JSON.stringify(report,null,2);
- }catch(e){summary.textContent=e.message}
- finally{for(const button of buttons)button.disabled=button.id==="probe"&&!!S.inventory_setup_required}
-}
-const actionLabel = status => ["inviato_non_verificato","accettato_da_ha_non_verificato"].includes(status)
- ? "Comando accettato (da verificare)" : status;
-const speed = value => value===null?"n/d":value+" KB/s";
-function deviceRow(d, current){
-  const row=node("div",undefined,"item"), left=node("div"), controls=node("div",undefined,"control");
-  const availability=current?(d.online?"Online":"Offline"):"Rilevato in precedenza";
-  add(left,node("strong",d.name),node("small",[d.mac,d.ip,availability].filter(Boolean).join(" · ")));
-  if(current&&(d.down_kbs!==null||d.up_kbs!==null))left.append(node("small","Ultimo campione · ↓ "+speed(d.down_kbs)+" · ↑ "+speed(d.up_kbs)));
-  if(d.last_action&&!S.inventory_only)left.append(node("small",actionLabel(d.last_action)));
-  const profile=drop([{value:"",label:"Nessuna persona"},...S.users.map(u=>({value:u.id,label:u.name}))],
-    d.user_id,v=>execute("assign",{mac:d.mac,user_id:v?Number(v):null}));
-  profile.setAttribute("aria-label","Persona assegnata a "+d.name);
-  controls.append(profile);
-  if(!S.inventory_only){
-   if(S.protected_macs.includes(d.mac))controls.append(node("span","Protetto","flag safe"));
-   else controls.append(btn(d.manually_blocked?"Sblocca":"Blocca",()=>execute("manual-block",{mac:d.mac,blocked:!d.manually_blocked}),d.manually_blocked?"subtle":"danger"));
-  }
-  add(row,left,controls);
-  return row;
-}
-function renderDevices(){
- const term=$("device-filter").value.trim().toLowerCase();
- const matches=d=>[d.name,d.mac,d.ip,d.user_name].some(value=>value?.toLowerCase().includes(term));
- const current=Boolean(S.last_poll&&!S.last_error);
- const latest=S.devices.filter(d=>current&&d.in_latest_snapshot);
- const previous=S.devices.filter(d=>!current||!d.in_latest_snapshot);
- const shownLatest=latest.filter(matches), shownPrevious=previous.filter(matches);
- const details=$("previous-devices");
- const time=S.last_poll&&new Date(S.last_poll).toLocaleString();
- const online=latest.filter(d=>d.online).length;
- const count=term?shownLatest.length+" di "+latest.length:latest.length;
- $("inventory-status").textContent=[
-  current?"Ultima lettura "+time+" · "+count+" dispositivi · "+online+" online":S.last_error||"In attesa della prima lettura.",
-  !current&&time?"Ultima lettura riuscita "+time:"",
-  S.inventory_setup_required?"Apri la scheda Configurazione di Deco Family Control in Home Assistant, poi salva e riavvia.":"",
-  S.ha_ingress&&S.mode==="mock"?"Per leggere il Deco, attiva l’inventario reale nella configurazione dell’app in Home Assistant.":""
- ].filter(Boolean).join(" · ");
- $("devices").replaceChildren(...shownLatest.map(d=>deviceRow(d,true)));
- if(current&&!shownLatest.length)$("devices").append(node("p",term?"Nessuna corrispondenza nell’ultima lettura.":"Nessun dispositivo nell’ultima lettura.","notice"));
- details.hidden=!shownPrevious.length;
- if(term&&shownPrevious.length)details.open=true;
- $("previous-device-count").textContent="Rilevati in precedenza · "+shownPrevious.length;
- $("device-history").replaceChildren(...shownPrevious.map(d=>deviceRow(d,false)));
-}
-function render(){
- $("release").textContent="Versione "+S.release;
- $("refresh").textContent=S.mode==="mock"?"Aggiorna simulazione":"Leggi dal Deco";
- if(S.inventory_setup_required){$("refresh").disabled=true;$("probe").disabled=true}
- if(S.ha_ingress && S.mode==="mock" && $("message").nextElementSibling!==$("deco-diagnostics"))$("message").after($("deco-diagnostics"));
- $("policy-panel").hidden=!!S.inventory_only;
- const flags=$("badges");flags.replaceChildren();
- if(S.inventory_setup_required)flags.append(node("span","CONFIGURAZIONE RICHIESTA","flag warning"));
- else add(flags,node("span",S.mode==="mock"?"SIMULAZIONE":"Deco "+S.router_ip,"flag "+(S.mode==="mock"?"warning":"")),node("span",S.writes_enabled?"COMANDI ATTIVI":"SOLA LETTURA","flag "+(S.writes_enabled?"warning":"safe")));
- const users=$("users");users.replaceChildren();for(const u of S.users){const row=node("div",undefined,"item"),left=node("div"),c=node("div",undefined,"control");add(left,node("strong",u.name),node("small",S.devices.filter(d=>d.user_id===u.id).length+" dispositivi"));
- if(!S.inventory_only){
-  add(c,btn(u.manually_blocked?"Sblocca":"Blocca ora",()=>execute("manual-block",{user_id:u.id,blocked:!u.manually_blocked}),u.manually_blocked?"subtle":"danger"));
-  const inp=node("input");inp.type="number";inp.min="1";inp.max="1440";inp.placeholder="Quota min";inp.value=u.quota_minutes||"";inp.style.width="100px";add(c,inp,btn("Salva quota",()=>execute("quota",{user_id:u.id,minutes:inp.value?Number(inp.value):null})));
- }
- add(row,left,c);users.append(row)}
- renderDevices();
- const select=$("window-user"),old=select.value;select.replaceChildren();for(const u of S.users){const o=node("option",u.name);o.value=u.id;select.appendChild(o)}if([...select.options].some(o=>o.value===old))select.value=old;
- const wins=$("windows");wins.replaceChildren();const days=["Lun","Mar","Mer","Gio","Ven","Sab","Dom"];for(const w of S.windows){const name=S.users.find(u=>u.id===w.user_id)?.name||"Utente";const row=node("div",undefined,"item");add(row,node("span",name+" · "+days[w.weekday]+" "+w.start_time+"–"+w.end_time),btn("Rimuovi",()=>execute("windows/"+w.id,undefined,"DELETE"),"danger"));wins.appendChild(row)}
- const usage=$("usage");usage.replaceChildren();for(const u of S.users){const minutes=S.usage_today.users[u.id]||0;const row=node("div",undefined,"item");add(row,node("span",u.name+": "+minutes+" min campionati"));usage.appendChild(row)}
- const table=node("table"),head=node("tr");for(const x of ["Orario","Dispositivo","Operazione","Stato"])head.append(node("th",x));table.append(head);for(const a of S.audit){const row=node("tr");for(const x of [a.time,a.mac||"—",a.action,actionLabel(a.status)])row.append(node("td",x));table.append(row)}$("audit").replaceChildren(table)
-}
-function history(items){const table=node("table"),head=node("tr");for(const x of ["Giorno","Dispositivo","Presenza campionata","Download medio","Download max","Upload medio","Upload max"])head.append(node("th",x));table.append(head);
- for(const a of items){const row=node("tr"),name=S.devices.find(d=>d.mac===a.mac)?.name||a.mac;for(const x of [a.day,name,a.minutes+" min",speed(a.average_down_kbs),speed(a.max_down_kbs),speed(a.average_up_kbs),speed(a.max_up_kbs)])row.append(node("td",x));table.append(row)}$("history").replaceChildren(table)}
-$("add-user").onsubmit=e=>{e.preventDefault();const val=$("user-name").value.trim();if(val)execute("users",{name:val});$("user-name").value=""};
-$("add-window").onsubmit=e=>{e.preventDefault();execute("windows",{user_id:Number($("window-user").value),weekday:Number($("weekday").value),start_time:$("start").value,end_time:$("end").value})};
-$("refresh").onclick=async()=>{
- const button=$("refresh");
- button.disabled=true;
- try{await execute("refresh",{})}finally{button.disabled=false}
-};
-$("device-filter").oninput=()=>{if(S.devices)renderDevices()};
-$("probe").onclick=()=>loadDiagnostics("POST");
-$("deco-probe-form").onsubmit=event=>{
- event.preventDefault();
- const password=$("deco-password");
- const credentials={router_ip:$("deco-ip").value.trim(),username:$("deco-username").value,password:password.value};
- password.value="";
- loadDiagnostics("POST", credentials);
-};
-refresh();loadDiagnostics();setInterval(refresh,30000);
-</script></body></html>
+</body>
+</html>

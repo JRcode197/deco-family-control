@@ -65,3 +65,19 @@ def test_protected_device_not_blocked(tmp_path):
     engine.enforce(now)
     assert mac not in adapter.blocked_macs()
     store.close()
+
+
+def test_mock_mode_uses_mock_adapter_even_with_guard_selected(tmp_path, monkeypatch):
+    def forbid_ha(*args):
+        raise AssertionError("La simulazione deve rimanere isolata da Home Assistant")
+
+    monkeypatch.setattr("app.engine.HomeAssistantGuardActuator", forbid_ha)
+    store = Store(str(tmp_path / "isolated-mock.sqlite"))
+    adapter = MockAdapter()
+    engine = Engine(store, adapter, Settings(writes_enabled=True, actuator="ha_guard"))
+    engine.poll()
+    mac = adapter.clients()[0].mac
+    store.execute("UPDATE devices SET manually_blocked=1 WHERE mac=?", (mac,))
+    assert engine.enforce()[0]["status"] == "simulato"
+    assert adapter.blocked_macs() == {mac}
+    store.close()

@@ -112,8 +112,10 @@ def test_deco_login_form_defaults_to_documented_local_api_user():
     """Do not mislead users into entering a personal name as the Deco API username."""
     from pathlib import Path
 
-    html = (Path(__file__).resolve().parents[1] / "app" / "static" / "index.html").read_text()
+    static = Path(__file__).resolve().parents[1] / "app" / "static"
+    html = (static / "index.html").read_text()
+    script = (static / "dashboard.js").read_text()
     assert 'id="deco-username" value="admin"' in html
-    assert 'password.value=""' in html
+    assert 'password.value=""' in script
     assert "password del TP-Link ID" in html
-    assert "potrebbe esserci un problema di protocollo" in html
+    assert "potrebbe esserci un problema di protocollo" in script

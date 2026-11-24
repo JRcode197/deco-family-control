@@ -5,6 +5,8 @@ from os import environ
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from app.deco import normalize_mac
+
 
 HA_OPTIONS_PATH = Path("/data/options.json")
 HA_DATABASE_PATH = "/data/inventory/family.sqlite3"
@@ -37,6 +39,7 @@ class Settings:
     database_path: str = "/data/family.sqlite3"
     timezone: str = "Europe/Rome"
     poll_seconds: int = 60
+    retention_days: int = 0
     writes_enabled: bool = False
     quota_enforcement: bool = False
     actuator: str = "sdk"
@@ -45,6 +48,10 @@ class Settings:
     protected_macs: tuple[str, ...] = ()
     ha_ingress: bool = False
     inventory_setup_error: str = ""
+
+
+def protected_macs(value: str) -> tuple[str, ...]:
+    return tuple(normalize_mac(item.strip()) for item in value.split(",") if item.strip())
 
 
 def ha_settings() -> Settings:
@@ -56,10 +63,19 @@ def ha_settings() -> Settings:
         raise ValueError("Impossibile leggere le opzioni Home Assistant.") from None
     if not isinstance(options, dict):
         raise ValueError("Formato delle opzioni Home Assistant non valido.")
+    try:
+        exempt_macs = protected_macs(options.get("protected_macs", ""))
+        retention = options.get("retention_days", 0)
+        if type(retention) is not int or not 0 <= retention <= 3650:
+            raise ValueError
+    except (ValueError, AttributeError):
+        settings = Settings(ha_ingress=True, mode="deco", database_path=HA_DATABASE_PATH)
+        return replace(settings, inventory_setup_error="Controlla retention_days e protected_macs.")
     if options.get("inventory_enabled") is not True:
-        return Settings(ha_ingress=True, database_path=":memory:")
+        return Settings(ha_ingress=True, database_path=":memory:", protected_macs=exempt_macs)
 
-    settings = Settings(mode="deco", ha_ingress=True, database_path=HA_DATABASE_PATH)
+    settings = Settings(mode="deco", ha_ingress=True, database_path=HA_DATABASE_PATH,
+                        retention_days=retention, protected_macs=exempt_macs)
     ip = options.get("deco_ip", settings.router_ip)
     username = options.get("deco_username", settings.router_user)
     password = options.get("deco_password")
@@ -91,12 +107,13 @@ def from_env() -> Settings:
         database_path=environ.get("DATABASE_PATH", "/data/family.sqlite3"),
         timezone=environ.get("TZ", "Europe/Rome"),
         poll_seconds=int(environ.get("POLL_SECONDS", "60")),
+        retention_days=int(environ.get("RETENTION_DAYS", "0")),
         writes_enabled=enabled("DECO_WRITE_ENABLED"),
         quota_enforcement=enabled("QUOTA_ENFORCEMENT"),
         actuator=environ.get("BLOCK_ACTUATOR", "sdk"),
         ha_url=environ.get("HA_URL", ""),
         ha_token=environ.get("HA_TOKEN", ""),
-        protected_macs=tuple(x.strip().upper().replace("-", ":") for x in environ.get("PROTECTED_MACS", "").split(",") if x.strip()),
+        protected_macs=protected_macs(environ.get("PROTECTED_MACS", "")),
     )
     if values.mode not in ("mock", "deco"):
         raise ValueError("DECO_MODE must be mock or deco")
@@ -104,6 +121,8 @@ def from_env() -> Settings:
         raise ValueError("BLOCK_ACTUATOR must be sdk or ha_guard")
     if values.poll_seconds < 30:
         raise ValueError("Polling interval must be at least 30 seconds")
+    if not 0 <= values.retention_days <= 3650:
+        raise ValueError("RETENTION_DAYS must be between 0 and 3650")
     ZoneInfo(values.timezone)
     if len(values.admin_password) < 12 or values.admin_password in ("change-me", "password"):
         raise ValueError("Configure a strong ADMIN_PASSWORD; app refuses to start without it")
@@ -111,6 +130,7 @@ def from_env() -> Settings:
         raise ValueError("Set PROTECTED_MACS for the admin/automation host before enabling router writes")
     if values.mode == "deco" and not values.router_password:
         raise ValueError("DECO_PASSWORD required in deco mode")
-    if values.actuator == "ha_guard" and values.writes_enabled and (not values.ha_url or not values.ha_token):
+    if (values.mode == "deco" and values.actuator == "ha_guard" and values.writes_enabled
+            and (not values.ha_url or not values.ha_token)):
         raise ValueError("HA_URL and HA_TOKEN required for ha_guard writes")
     return values

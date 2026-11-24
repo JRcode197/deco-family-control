@@ -1,7 +1,7 @@
 """Local-only API and responsive dashboard; not for public Internet exposure."""
 from contextlib import asynccontextmanager
 from dataclasses import asdict
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from ipaddress import IPv4Address
 from pathlib import Path
 from typing import Annotated
@@ -17,19 +17,17 @@ from pydantic import BaseModel, Field, SecretStr, StringConstraints, field_valid
 
 from app.config import Settings, from_env, private_router_ip, release_version
 from app.deco import Adapter, MockAdapter, DecoSdkAdapter, normalize_mac
+from app.dns import dns_router
 from app.diagnostics import PROBE_INTERVAL_SECONDS, ProbeCooldown
 from app.engine import Engine
-from app.policy import to_minutes
+from app.policy import next_transitions, profile_reason
+from app.profiles import TEMPLATES, Window, profiles_router
 from app.store import Store
 
 log = logging.getLogger(__name__)
 security = HTTPBasic()
 SUPERVISOR_IP = "172.30.32.2"
 NO_CACHE = {"Cache-Control": "no-store"}
-
-
-class NewUser(BaseModel):
-    name: str = Field(min_length=1, max_length=60)
 
 
 class DecoProbeCredentials(BaseModel):
@@ -58,21 +56,6 @@ class Quota(BaseModel):
     user_id: int | None = None
     mac: str | None = None
     minutes: int | None = Field(default=None, ge=1, le=1440)
-
-
-class Window(BaseModel):
-    user_id: int
-    weekday: int = Field(ge=0, le=6)
-    start_time: str
-    end_time: str
-
-    @field_validator("start_time", "end_time")
-    @classmethod
-    def validate_time(cls, value: str) -> str:
-        if len(value) != 5 or value[2] != ":":
-            raise ValueError("Use HH:MM")
-        to_minutes(value)
-        return value
 
 
 def create_app(settings: Settings | None = None, *, store: Store | None = None, adapter=None) -> FastAPI:
@@ -142,19 +125,41 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
                   openapi_url=None if settings.ha_ingress else "/openapi.json")
     app.state.engine = engine
     app.state.store = store
+    app.include_router(profiles_router(store, settings, engine, authenticate, mutation_guard))
+    app.include_router(dns_router(store, settings, authenticate, mutation_guard))
 
     @app.get("/", dependencies=[Depends(authenticate)])
     def home():
         return FileResponse(Path(__file__).parent / "static" / "index.html",
                             headers={"Cache-Control": "no-store"})
 
+    @app.get("/dashboard.js", dependencies=[Depends(authenticate)], include_in_schema=False)
+    def dashboard_script():
+        return FileResponse(Path(__file__).parent / "static" / "dashboard.js",
+                            media_type="text/javascript", headers=NO_CACHE)
+
+    @app.get("/dns.js", dependencies=[Depends(authenticate)], include_in_schema=False)
+    def dns_script():
+        return FileResponse(Path(__file__).parent / "static" / "dns.js",
+                            media_type="text/javascript", headers=NO_CACHE)
+
     @app.get("/api/state", dependencies=[Depends(authenticate)])
     def state():
-        day = datetime.now(ZoneInfo(settings.timezone)).date().isoformat()
+        now = datetime.now(ZoneInfo(settings.timezone))
+        day = now.date().isoformat()
         with store.lock:
             last_poll = engine.last_poll
             last_error = settings.inventory_setup_error or engine.last_error
             devices = store.devices(sample_minute=engine.last_sample_minute, snapshot_at=last_poll)
+            users = store.users()
+            windows = store.windows()
+            quotas = store.query("SELECT user_id,weekday,minutes FROM weekly_quotas")
+            usage_today = store.usage(day)
+            audit = store.audit(30)
+        for user in users:
+            rules = [w for w in windows if w["user_id"] == user["id"]]
+            user["policy_reason"] = profile_reason(now, user, rules)
+            user.update(next_transitions(now, user, rules))
         return JSONResponse({
             "release": release,
             "mode": settings.mode,
@@ -162,21 +167,25 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
             "inventory_only": inventory_only,
             "inventory_setup_required": bool(settings.inventory_setup_error),
             "router_ip": settings.router_ip,
-            "writes_enabled": settings.writes_enabled,
-            "quota_enforcement": settings.quota_enforcement,
+            "writes_enabled": settings.writes_enabled and not settings.ha_ingress,
+            "quota_enforcement": engine.presence_quota_simulation,
+            "timezone": settings.timezone,
             "actuator": settings.actuator,
             "protected_macs": list(settings.protected_macs),
             "last_poll": last_poll,
             "last_error": last_error,
-            "users": store.users(),
+            "users": users,
             "devices": devices,
-            "windows": store.windows(),
-            "usage_today": store.usage(day),
-            "audit": store.audit(30),
-            "stats_label": "Minuti di presenza Wi-Fi osservata (non tempo schermo né traffico Internet)",
+            "windows": windows,
+            "templates": TEMPLATES,
+            "weekly_quotas": quotas,
+            "usage_today": usage_today,
+            "audit": audit,
+            "stats_label": "Minuti di presenza in rete osservata dal Deco (non tempo schermo né traffico Internet)",
             "capabilities": {
                 "client_inventory": last_poll is not None and not last_error,
                 "manual_block": "da_verificare_su_x50" if settings.mode == "deco" else "simulato",
+                "dns_filtering": "esportazione_adguard_manuale",
                 "site_history": False,
                 "app_usage": False,
                 "bandwidth_per_device": "velocita_istantanea_campionata" if settings.mode == "deco" else False,
@@ -221,25 +230,20 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
             ) from None
         return JSONResponse(asdict(report), headers={"Cache-Control": "no-store"})
 
-    @app.post("/api/users", dependencies=[Depends(mutation_guard)])
-    def new_user(payload: NewUser):
-        try:
-            return {"id": store.execute("INSERT INTO users(name) VALUES (?)", (payload.name.strip(),))}
-        except Exception as exc:
-            raise HTTPException(409, "Utente già presente o non valido") from exc
-
     @app.post("/api/assign", dependencies=[Depends(mutation_guard)])
     def assign(payload: Assignment):
         try:
             mac = normalize_mac(payload.mac)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
-        if payload.user_id is not None and not store.query("SELECT id FROM users WHERE id=?", (payload.user_id,)):
-            raise HTTPException(404, "Utente inesistente")
-        if not store.query("SELECT mac FROM devices WHERE mac=?", (mac,)):
-            raise HTTPException(404, "Dispositivo non trovato: aggiorna elenco")
-        store.execute("UPDATE devices SET user_id=? WHERE mac=?", (payload.user_id, mac))
-        store.log("assign", "ok", mac, str(payload.user_id))
+        with store.policy_change("assegnazione_dispositivo", f"profilo={payload.user_id or 'nessuno'}") as db:
+            if payload.user_id is not None and not store.query("SELECT id FROM users WHERE id=?", (payload.user_id,)):
+                raise HTTPException(404, "Profilo inesistente.")
+            result = db.execute("""UPDATE devices SET user_id=?,
+                profile_exempt=CASE WHEN user_id IS ? THEN profile_exempt ELSE 0 END WHERE mac=?""",
+                (payload.user_id, payload.user_id, mac))
+            if not result.rowcount:
+                raise HTTPException(404, "Dispositivo non trovato. Aggiorna l’elenco.")
         return {"ok": True}
 
     @app.post("/api/manual-block", dependencies=[Depends(policy_guard)])
@@ -257,7 +261,7 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
         else:
             if not store.query("SELECT id FROM users WHERE id=?", (payload.user_id,)):
                 raise HTTPException(404, "Utente inesistente")
-            store.execute("UPDATE users SET manually_blocked=? WHERE id=?", (int(payload.blocked), payload.user_id))
+            store.execute("UPDATE users SET manually_blocked=?,override_until=NULL WHERE id=?", (int(payload.blocked), payload.user_id))
             store.log("manual_rule", "ok", detail=f"user={payload.user_id} blocked={payload.blocked}")
         return {"ok": True, "actions": engine.enforce()}
 
@@ -293,11 +297,37 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
         return {"ok": True, "actions": engine.enforce()}
 
     @app.get("/api/usage", dependencies=[Depends(authenticate)])
-    def usage(days: int = Query(7, ge=1, le=90)):
+    def usage(days: int = Query(7, ge=1, le=90), start: date | None = None,
+              end: date | None = None, user_id: int | None = None, mac: str | None = None):
         today = datetime.now(ZoneInfo(settings.timezone)).date()
-        return JSONResponse({"data": store.daily_usage(days, today=today),
-                            "label": "Observed connection minutes and sampled instantaneous speeds (KB/s), NOT data usage totals, app usage or visited websites"},
-                            headers=NO_CACHE)
+        if (start is None) != (end is None):
+            raise HTTPException(422, "Specifica entrambe le date.")
+        if start is None:
+            start, end = today - timedelta(days=days - 1), today
+        if not 0 <= (end - start).days < 366 or end > today:
+            raise HTTPException(422, "Scegli un periodo valido fino a 366 giorni e senza date future.")
+        if mac is not None:
+            try:
+                mac = normalize_mac(mac)
+            except ValueError:
+                raise HTTPException(422, "Indirizzo MAC non valido.") from None
+        devices, profiles = store.usage_report(start, end, user_id=user_id, mac=mac)
+        return JSONResponse({
+            "data": devices,
+            "profiles": profiles,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "timezone": settings.timezone,
+            "poll_seconds": settings.poll_seconds,
+            "retention_days": settings.retention_days,
+            "source": "Inventario Deco" if settings.mode == "deco" else "Simulazione",
+            "label": "Presenza in rete osservata per minuto UTC e velocità istantanee (KB/s). "
+                     "I profili usano le assegnazioni attuali.",
+        }, headers=NO_CACHE)
+
+    @app.delete("/api/usage", dependencies=[Depends(mutation_guard)])
+    def clear_usage(through: date | None = None):
+        return {"removed": store.clear_samples(through)}
 
     return app
 
