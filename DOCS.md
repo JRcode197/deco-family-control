@@ -1,4 +1,4 @@
-# Deco Family Control 0.3.0
+# Deco Family Control 0.3.1
 
 ## Installare o aggiornare l’app Home Assistant
 
@@ -49,7 +49,7 @@ Questa configurazione è indipendente dal Deco. L’app salva le impostazioni ed
 - **Ultima presenza online** è l’ultimo campione che indicava il dispositivo online. L’inventario può includere client Wi-Fi e cablati. Lo stato online in tempo reale è rappresentato dall’ultima lettura riuscita. Durante un errore, l’app segnala lo stato precedente come non aggiornato.
 - **Presenza campionata** conta i minuti UTC con almeno un’osservazione online. Un profilo conta una sola volta il minuto anche con più dispositivi, in base alle assegnazioni attuali. I giorni sono raggruppati nel fuso locale. Intervalli senza osservazioni restano assenti.
 - **Velocità media e massima** usano i valori istantanei in KB/s restituiti dal Deco. La tabella mostra quanti campioni hanno quel valore. Un campione esplicitamente pari a zero è distinto da un valore assente. Le medie non forniscono il volume trasferito. Tempo attivo Internet, tempo di utilizzo per app e tempo-schermo restano indisponibili.
-- In **Statistiche della rete**, scegli periodo, persona e dispositivo. **Conservazione dei campioni** permette di eliminare i campioni fino a una data inclusa o eliminare l’intero storico campionato. Restano inventario, regole, ultimo stato e registro delle operazioni.
+- In **Statistiche della rete**, scegli periodo, persona e dispositivo. **Conservazione dei campioni** offre periodi mobili da 7, 30, 90 o 180 giorni, incluso oggi, oppure conservazione senza scadenza. La scelta è salvata nel database, ha precedenza su `retention_days` e rimuove subito i campioni fuori periodo. La pulizia continua automaticamente durante le letture del Deco. Con **Usa le impostazioni dell’app** torni al valore configurato nelle opzioni. Puoi anche eliminare i campioni fino a una data inclusa o eliminare l’intero storico campionato. Restano inventario, regole, ultimo stato e registro delle operazioni.
 - Le **Quote Internet** memorizzano gli obiettivi per giorno. Il tempo di presenza e le velocità campionate non vengono usati per bloccare automaticamente la rete reale.
 
 ## Collaudo fisico Deco X50

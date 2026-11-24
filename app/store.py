@@ -72,6 +72,10 @@ CREATE TABLE IF NOT EXISTS minute_samples (
 );
 CREATE INDEX IF NOT EXISTS ix_sample_mac_day ON minute_samples (mac, day);
 CREATE INDEX IF NOT EXISTS ix_sample_day ON minute_samples (day);
+CREATE TABLE IF NOT EXISTS sample_retention (
+  id INTEGER PRIMARY KEY CHECK(id=1),
+  days INTEGER NOT NULL CHECK(days IN (0,7,30,90,180))
+);
 CREATE TABLE IF NOT EXISTS audit (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   time TEXT NOT NULL, mac TEXT, action TEXT NOT NULL,
@@ -209,9 +213,29 @@ class Store:
         devices, _ = self.usage_report(today - timedelta(days=days - 1), today)
         return devices
 
-    def prune_samples(self, days: int, today: str):
+    def sample_retention(self) -> int | None:
+        rows = self.query("SELECT days FROM sample_retention WHERE id=1")
+        return rows[0]["days"] if rows else None
+
+    def prune_samples(self, days: int, today: str) -> int:
+        with self.lock, self.db:
+            return self._prune_samples(self.db, days, today)
+
+    @staticmethod
+    def _prune_samples(db, days: int, today: str) -> int:
+        if days == 0:
+            return 0
         first_day = date.fromisoformat(today) - timedelta(days=days - 1)
-        self.execute("DELETE FROM minute_samples WHERE day<?", (first_day.isoformat(),))
+        return db.execute("DELETE FROM minute_samples WHERE day<?", (first_day.isoformat(),)).rowcount
+
+    def set_sample_retention(self, days: int | None, fallback: int, today: str) -> int:
+        with self.policy_change("conservazione_campioni", f"giorni={days if days is not None else fallback}") as db:
+            if days is None:
+                db.execute("DELETE FROM sample_retention WHERE id=1")
+            else:
+                db.execute("""INSERT INTO sample_retention(id,days) VALUES (1,?)
+                    ON CONFLICT(id) DO UPDATE SET days=excluded.days""", (days,))
+            return self._prune_samples(db, fallback if days is None else days, today)
 
     def clear_samples(self, through: date | None = None) -> int:
         with self.policy_change("cancellazione_campioni", "") as db:
