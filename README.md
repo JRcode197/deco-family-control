@@ -4,12 +4,10 @@ A **local-first, no-subscription** parental network policy prototype for TP-Link
 
 > **Status: working mock/demo and unverified real Deco integration, not a tested protection product.** Do not rely on it to protect children until real traffic blocking and recovery have been verified on your X50. The program does **not** unlock paid HomeShield features, collect iOS screen time, measure true app usage, or provide detailed browsing history.
 
-## Hardware / scenario
+## Requirements
 
-- Deco **X50**, master `192.168.21.1` (router mode)
-- Firmware **1.11.1 Build 26081714 Rel. 32981** (reported on 23 Nov 2026)
-- Family profiles (examples): **Alice**, **Anna**; each profile may own several devices.
-- No Archer C6, no new router. An **always-on local** Linux/Docker host is required for schedules (can be separate from the Deco). Codex cloud is for development, **not** for controlling an inaccessible private LAN.
+- TP-Link Deco X50 with access to its local web interface.
+- Home Assistant with app support or a local host running Docker. Keep the host online for scheduled rules.
 
 ## Funzionalità nella versione 0.3.0
 
@@ -24,7 +22,7 @@ Consulta le [istruzioni di installazione e aggiornamento](DOCS.md#installare-o-a
 
 ## Non-goals and unresolved integration risks
 
-1. `tplink-deco-api` 2.2.0 uses the Deco local API; read-only inventory has been observed on the reported X50 firmware. Other operations require individual verification. `get_client_list()` may return incomplete/offline data. Credentials are the **admin web interface login** (often TP-Link ID) accepted by local firmware; do not assume `admin` works on every model.
+1. `tplink-deco-api` 2.2.0 uses the Deco local API; use the read-only diagnostic to check inventory support for your firmware. `get_client_list()` may return incomplete/offline data. Credentials are the **admin web interface login** (often TP-Link ID) accepted by local firmware; do not assume `admin` works on every model.
 2. The SDK's `clients.block()` may change the router's block list **without enforcing the internet block** on some firmwares. [Deco Guard](https://github.com/leewsimpson/ha-deco-guard) reports that on BE85 an SSH/TMP app protocol is necessary. Its API may not work with X50; nothing in this project claims otherwise. Test actual internet reachability after block and after unblock.
 3. Current `managed_block` tracks accepted control commands, **not verified enforcement**. For strong enforcement use the `ha_guard` actuator only if the separate Home Assistant Deco Guard integration passes X50 tests. It is GPL-3.0 and is **not copied or bundled** here.
 4. HomeShield `patrol_insights` and DPI endpoints are documented but may be subscription gated. No attempt is made to circumvent paid functions. Sites and apps history require a separately configured DNS logger such as AdGuard Home and have privacy/coverage limits.
@@ -42,7 +40,7 @@ docker compose up --build -d
 open http://127.0.0.1:8088
 ```
 
-Sign in with `ADMIN_USER` / `ADMIN_PASSWORD`. Add Alice and Anna, assign mock devices, create a schedule. `DECO_MODE=mock`, `DECO_WRITE_ENABLED=false`: **no changes to your router**. HTTP Basic is suitable only behind localhost or HTTPS/VPN; do not expose port 8088 publicly. To reach from iPhone, prefer an authenticated local HTTPS reverse proxy or private VPN such as Tailscale. The default port binding is deliberately loopback-only.
+Sign in with `ADMIN_USER` / `ADMIN_PASSWORD`. Create a profile, assign simulated devices, and create a schedule. `DECO_MODE=mock`, `DECO_WRITE_ENABLED=false`: **no changes to your router**. HTTP Basic is suitable only behind localhost or HTTPS/VPN; do not expose port 8088 publicly. To reach from iPhone, prefer an authenticated local HTTPS reverse proxy or private VPN such as Tailscale. The default port binding is deliberately loopback-only.
 
 ## Staged, real-network X50 verification
 
@@ -74,12 +72,12 @@ The documented local procedure uses one spare client, an independent administrat
 
 ### Compatibility matrix
 
-| Capability | SDK or integration evidence | Deco X50 · 1.11.1 Build 26081714 Rel. 32981 |
+| Capability | SDK or integration evidence | Deco X50 compatibility |
 | --- | --- | --- |
-| Client inventory and gateway firmware | SDK 2.2.0 documents local inventory and mesh device-list reads. The diagnostic checks them individually. | Local inventory reported with 33 devices and firmware metadata. An explicit HTTP 404 or 501 for a read is **not supported**. |
+| Client inventory and gateway firmware | SDK 2.2.0 documents local inventory and mesh device-list reads. The diagnostic checks them individually. | Run the read-only diagnostic to check inventory and firmware detection. HTTP 404 or 501 indicates an unavailable read endpoint. |
 | Blocklist visibility | `clients.get_blocked()` reads the mesh blocklist. The diagnostic validates the list shape and reports only its count. | Read-only check pending. |
 | Actual Internet block and recovery | `clients.block()` sends a blocklist operation. `clients.unblock()` sends the inverse operation. | **Unverified** until the separate physical test. |
-| Presence and sampled speeds | Presence counts minutes with an online inventory observation. SDK speed fields are instantaneous KB/s samples. SDK `get_client_totals()` sums speeds. | Instantaneous speeds observed. Byte counters, iOS screen time and app/site history are unavailable in this integration. |
+| Presence and sampled speeds | Presence counts minutes with an online inventory observation. SDK speed fields are instantaneous KB/s samples. SDK `get_client_totals()` sums speeds. | Instantaneous speed availability depends on the firmware response. Byte counters, iOS screen time and app/site history are unavailable in this integration. |
 | Optional Home Assistant Deco Guard | Separate GPL-3.0-or-later integration. Upstream reports testing on BE85 fw 1.2.4 and uses the app management protocol to complement the web API. | X50 compatibility and physical enforcement pending. |
 
 ## Development
