@@ -94,7 +94,7 @@ class Engine:
                 mac = device["mac"]
                 if mac in self.settings.protected_macs:
                     continue
-                reason = device_reason(device, reasons.get(device["user_id"]))
+                reason = device_reason(device, reasons)
                 if not reason and self.presence_quota_simulation:
                     reason = policy_reason(
                         manually_blocked=False, scheduled=False, quota_enforcement=True,

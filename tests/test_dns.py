@@ -81,6 +81,12 @@ def test_dns_import_export_without_provider_and_profile_copy(tmp_path):
         assert "CNAME;restrictmoderate.youtube.com" in rules
         assert protected.mac not in rules
 
+        client.put(f"/api/devices/{first.mac}/profiles", json={"user_ids": [alice, anna]}).raise_for_status()
+        client.put(f"/api/dns/users/{anna}/web", json={"youtube_mode": "strict", "blocked_domains": ["shared.test"]}).raise_for_status()
+        merged = client.get("/api/dns/export").raise_for_status().json()["rules"]
+        assert merged.count("||shared.test^$client='alice'") == 1
+        assert "CNAME;restrict.youtube.com" in merged and "restrictmoderate.youtube.com" not in merged
+
         target = f"/api/users/{anna}/copy"
         payload = {"source_id": alice, "groups": ["web"]}
         preview = client.post(target + "/preview", json=payload).raise_for_status().json()

@@ -125,7 +125,7 @@ function serviceSettings(path, data) {
 }
 
 function bindingSettings(user, data, path) {
-  const bindable = state.devices.filter(device => device.user_id === user.id && !state.protected_macs.includes(device.mac));
+  const bindable = state.devices.filter(device => device.user_ids.includes(user.id) && !state.protected_macs.includes(device.mac));
   const section = node("div", undefined, "stack");
   if (!bindable.length) section.append(node("p", "Assegna un dispositivo non protetto a questo profilo per esportarne le regole.", "notice"));
   for (const device of bindable) {
@@ -145,7 +145,7 @@ function bindingSettings(user, data, path) {
       save(endpoint, "PUT", {client_name: name.value, blocked_domains: domainList(blocked), allowed_domains: domainList(allowed)});
     };
     if (binding) form.append(button("Rimuovi collegamento", () => save(endpoint, "DELETE")));
-    section.append(details(device.name + " · " + (binding ? binding.client_name : "Da collegare"), form));
+    section.append(details(deviceLabel(device) + " · " + (binding ? binding.client_name : "Da collegare"), form));
   }
   return section;
 }

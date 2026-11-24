@@ -163,7 +163,7 @@ def dns_router(store, settings, authenticate, mutation_guard) -> APIRouter:
             raise HTTPException(422, "Indirizzo MAC non valido.") from None
         if mac in settings.protected_macs:
             raise HTTPException(403, "Dispositivo amministrativo protetto.")
-        if not store.query("SELECT mac FROM devices WHERE user_id=? AND mac=?", (user_id, mac)):
+        if not store.query("SELECT mac FROM device_profiles WHERE user_id=? AND mac=?", (user_id, mac)):
             raise HTTPException(404, "Dispositivo non assegnato a questo profilo.")
         return mac
 
@@ -178,8 +178,8 @@ def dns_router(store, settings, authenticate, mutation_guard) -> APIRouter:
             check_profile(user_id)
             web, services = load_profile(user_id)
             sources = category_sources()
-            bindings = store.query("""SELECT b.mac,b.data FROM dns_devices b JOIN devices d USING(mac)
-                WHERE d.user_id=?""", (user_id,))
+            bindings = store.query("""SELECT b.mac,b.data FROM dns_devices b JOIN device_profiles p USING(mac)
+                WHERE p.user_id=?""", (user_id,))
         now = datetime.now(zone)
         return JSONResponse({
             "status": "configurazione_locale",
@@ -266,20 +266,32 @@ def dns_router(store, settings, authenticate, mutation_guard) -> APIRouter:
             categories = {row["name"]: json.loads(row["domains"]) for row in store.query(
                 "SELECT name,domains FROM dns_categories"
             )}
-            devices = store.query("""SELECT d.mac,d.user_id,b.data FROM devices d LEFT JOIN dns_devices b USING(mac)
-                WHERE d.user_id IS NOT NULL ORDER BY d.user_id,d.mac""")
-            policies = {user_id: load_profile(user_id) for user_id in {device["user_id"] for device in devices}}
+            devices = sorted((device for device in store.devices() if device["user_ids"]),
+                             key=lambda device: (device["user_ids"][0], device["mac"]))
+            bindings = {row["mac"]: row["data"] for row in store.query("SELECT mac,data FROM dns_devices")}
+            user_ids = {user_id for device in devices for user_id in device["user_ids"]}
+            policies = {user_id: load_profile(user_id) for user_id in user_ids}
         rules = ["! BEGIN Deco Family Control"]
         statuses = []
+        modes = ("off", "moderate", "strict")
         for device in devices:
             if device["mac"] in settings.protected_macs:
                 statuses.append({"mac": device["mac"], "status": "protetto"})
                 continue
-            if not device["data"]:
+            if device["mac"] not in bindings:
                 statuses.append({"mac": device["mac"], "status": "client_non_collegato"})
                 continue
-            client = DeviceDns.model_validate_json(device["data"])
-            web, services = policies[device["user_id"]]
+            client = DeviceDns.model_validate_json(bindings[device["mac"]])
+            web, services = WebPolicy(), ServicePolicy()
+            for user_id in device["user_ids"]:
+                profile_web, profile_services = policies[user_id]
+                web.blocked_domains.update(profile_web.blocked_domains)
+                web.allowed_domains.update(profile_web.allowed_domains)
+                web.categories.update(profile_web.categories)
+                web.safe_search |= profile_web.safe_search
+                web.youtube_mode = max(web.youtube_mode, profile_web.youtube_mode, key=modes.index)
+                services.blocked_services.update(profile_services.blocked_services)
+                services.allowed_services.update(profile_services.allowed_services)
             rules += export_rules(client, web, services, categories)
             statuses.append({"mac": device["mac"], "status": "esportabile"})
         rules.append("! END Deco Family Control")

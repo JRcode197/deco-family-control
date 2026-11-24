@@ -50,6 +50,14 @@ class Assignment(BaseModel):
     user_id: int | None = None
 
 
+class DeviceProfiles(BaseModel):
+    user_ids: set[int] = Field(max_length=100)
+
+
+class DeviceAlias(BaseModel):
+    alias: Annotated[str, StringConstraints(strip_whitespace=True, max_length=80)]
+
+
 class BlockRequest(BaseModel):
     mac: str | None = None
     user_id: int | None = None
@@ -234,19 +242,38 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
             ) from None
         return JSONResponse(asdict(report), headers={"Cache-Control": "no-store"})
 
+    def device_mac(value: str) -> str:
+        try:
+            return normalize_mac(value)
+        except ValueError:
+            raise HTTPException(422, "Indirizzo MAC non valido.") from None
+
+    def replace_device_profiles(mac: str, user_ids: set[int]):
+        with store.policy_change("assegnazione_dispositivo", f"profili={len(user_ids)}") as db:
+            if not store.query("SELECT mac FROM devices WHERE mac=?", (mac,)):
+                raise HTTPException(404, "Dispositivo non trovato. Aggiorna l’elenco.")
+            if user_ids - {user["id"] for user in store.users()}:
+                raise HTTPException(404, "Profilo inesistente.")
+            current = {row["user_id"] for row in store.query("SELECT user_id FROM device_profiles WHERE mac=?", (mac,))}
+            db.executemany("DELETE FROM device_profiles WHERE mac=? AND user_id=?",
+                           ((mac, user_id) for user_id in current - user_ids))
+            db.executemany("INSERT INTO device_profiles(mac,user_id) VALUES (?,?)",
+                           ((mac, user_id) for user_id in user_ids - current))
+        return {"ok": True}
+
     @app.post("/api/assign", dependencies=[Depends(mutation_guard)])
     def assign(payload: Assignment):
-        try:
-            mac = normalize_mac(payload.mac)
-        except ValueError as exc:
-            raise HTTPException(422, str(exc)) from exc
-        with store.policy_change("assegnazione_dispositivo", f"profilo={payload.user_id or 'nessuno'}") as db:
-            if payload.user_id is not None and not store.query("SELECT id FROM users WHERE id=?", (payload.user_id,)):
-                raise HTTPException(404, "Profilo inesistente.")
-            result = db.execute("""UPDATE devices SET user_id=?,
-                profile_exempt=CASE WHEN user_id IS ? THEN profile_exempt ELSE 0 END WHERE mac=?""",
-                (payload.user_id, payload.user_id, mac))
-            if not result.rowcount:
+        return replace_device_profiles(device_mac(payload.mac), set() if payload.user_id is None else {payload.user_id})
+
+    @app.put("/api/devices/{mac}/profiles", dependencies=[Depends(mutation_guard)])
+    def set_device_profiles(mac: str, payload: DeviceProfiles):
+        return replace_device_profiles(device_mac(mac), payload.user_ids)
+
+    @app.put("/api/devices/{mac}/alias", dependencies=[Depends(mutation_guard)])
+    def set_device_alias(mac: str, payload: DeviceAlias):
+        mac = device_mac(mac)
+        with store.policy_change("alias_dispositivo", "") as db:
+            if not db.execute("UPDATE devices SET alias=? WHERE mac=?", (payload.alias, mac)).rowcount:
                 raise HTTPException(404, "Dispositivo non trovato. Aggiorna l’elenco.")
         return {"ok": True}
 
@@ -301,7 +328,7 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
         return {"ok": True, "actions": engine.enforce()}
 
     @app.get("/api/usage", dependencies=[Depends(authenticate)])
-    def usage(days: int = Query(7, ge=1, le=90), start: date | None = None,
+    def usage(days: int = Query(7, ge=1, le=366), start: date | None = None,
               end: date | None = None, user_id: int | None = None, mac: str | None = None):
         today = datetime.now(ZoneInfo(settings.timezone)).date()
         if (start is None) != (end is None):
@@ -316,11 +343,10 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
             except ValueError:
                 raise HTTPException(422, "Indirizzo MAC non valido.") from None
         with store.lock:
-            devices, profiles = store.usage_report(start, end, user_id=user_id, mac=mac)
+            report = store.usage_report(start, end, user_id=user_id, mac=mac)
             selected = store.sample_retention()
         return JSONResponse({
-            "data": devices,
-            "profiles": profiles,
+            **report,
             "start": start.isoformat(),
             "end": end.isoformat(),
             "timezone": settings.timezone,

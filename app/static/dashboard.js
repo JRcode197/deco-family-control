@@ -123,13 +123,57 @@ function actionLabel(status) {
   return status;
 }
 
+const deviceLabel = device => device.alias || device.name;
+const deviceMatches = (device, term) => [device.alias, device.name, device.mac, device.ip, ...device.user_names]
+  .some(value => value?.toLocaleLowerCase("it").includes(term));
+
+function deviceLink(device) {
+  const link = node("a", deviceLabel(device));
+  link.href = "#statistiche";
+  link.onclick = () => {
+    $("report-user").value = "";
+    filterReportDevices();
+    $("report-device").value = device.mac;
+    loadReport();
+  };
+  return link;
+}
+
+function deviceSettings(device) {
+  const path = "devices/" + encodeURIComponent(device.mac);
+  const alias = input("text", device.alias);
+  alias.maxLength = 80;
+  const aliasForm = add(node("form", undefined, "controls"), field("Alias", alias), submit("Salva alias"));
+  aliasForm.onsubmit = event => {
+    event.preventDefault();
+    save(path + "/alias", "PUT", {alias: alias.value});
+  };
+
+  const people = state.users.map(user => ({id: user.id, ...checkbox(user.name, device.user_ids.includes(user.id))}));
+  const settings = details(deviceLabel(device), aliasForm);
+  settings.className = "device-settings";
+  if (!people.length) return settings;
+  const profiles = add(node("fieldset"), node("legend", "Profili associati"),
+    add(node("div", undefined, "checks"), ...people.map(person => person.label)));
+  const profilesForm = add(node("form", undefined, "stack"), profiles, submit("Salva profili"));
+  profilesForm.onsubmit = event => {
+    event.preventDefault();
+    const user_ids = people.filter(person => person.element.checked).map(person => person.id);
+    save(path + "/profiles", "PUT", {user_ids});
+  };
+  settings.append(profilesForm);
+  return settings;
+}
+
 function deviceRow(device, user = null) {
   const fresh = state.last_poll && !state.last_error && device.in_latest_snapshot;
   const availability = fresh ? (device.online ? "Online" : "Offline") : "Stato non aggiornato";
   const protectedDevice = state.protected_macs.includes(device.mac);
   const types = {phone: "Telefono", tablet: "Tablet", computer: "Computer", unknown: "Tipo sconosciuto"};
-  const identity = add(node("div"), node("strong", device.name),
-    node("small", [types[device.client_type] || device.client_type, device.ip, device.mac, availability].filter(Boolean).join(" · ")));
+  const identity = add(node("div"), deviceSettings(device),
+    node("small", [device.alias ? device.name : "", types[device.client_type] || device.client_type,
+      device.ip, device.mac, availability].filter(Boolean).join(" · ")));
+  if (device.user_names.length) identity.append(node("small", "Profili: " + device.user_names.join(", ")));
   if (device.last_online) identity.append(node("small", "Ultima presenza online " + clock(device.last_online)));
   if (user && !protectedDevice) {
     const preview = node("small");
@@ -141,20 +185,16 @@ function deviceRow(device, user = null) {
   }
   if (device.last_action && !state.inventory_only) identity.append(node("small", actionLabel(device.last_action)));
 
-  const owner = select([["", "Senza profilo"], ...state.users.map(person => [person.id, person.name])], device.user_id);
-  owner.setAttribute("aria-label", "Profilo assegnato a " + device.name);
-  owner.onchange = async () => {
-    owner.disabled = true;
-    if (!await save("assign", "POST", {mac: device.mac, user_id: Number(owner.value) || null}))
-      owner.value = device.user_id ?? "";
-    owner.disabled = false;
-  };
-  const controls = add(node("div", undefined, "controls"), owner);
+  const statistics = deviceLink(device);
+  statistics.textContent = "Statistiche";
+  statistics.setAttribute("aria-label", "Statistiche di " + deviceLabel(device));
+  const controls = add(node("div", undefined, "controls"), statistics);
   if (protectedDevice) controls.append(node("span", "Protetto", "flag safe"));
   if (user && !protectedDevice) {
-    const label = device.profile_exempt ? "Ripristina regole del profilo" : "Escludi dalle regole del profilo";
+    const exempt = device.profile_exemptions.includes(user.id);
+    const label = exempt ? "Ripristina regole del profilo" : "Escludi dalle regole del profilo";
     controls.append(button(label, () => save("users/" + user.id + "/devices/" + device.mac + "/exception",
-      "PUT", {exempt: !device.profile_exempt})));
+      "PUT", {exempt: !exempt})));
   }
   if (!state.inventory_only && !protectedDevice) {
     const label = device.manually_blocked ? "Revoca blocco dispositivo" : "Blocca dispositivo";
@@ -166,9 +206,8 @@ function deviceRow(device, user = null) {
 }
 
 function renderInventory() {
-  const term = $("device-filter").value.trim().toLowerCase();
-  const matches = device => [device.name, device.mac, device.ip, device.user_name]
-    .some(value => value?.toLowerCase().includes(term));
+  const term = $("device-filter").value.trim().toLocaleLowerCase("it");
+  const matches = device => deviceMatches(device, term);
   const current = Boolean(state.last_poll && !state.last_error);
   const latest = state.devices.filter(device => current && device.in_latest_snapshot);
   const previous = state.devices.filter(device => !current || !device.in_latest_snapshot);
@@ -181,8 +220,8 @@ function renderInventory() {
     state.ha_ingress && state.mode === "mock" ? "Attiva l’inventario nelle opzioni dell’app per leggere il Deco." : ""
   ].filter(Boolean).join(" · ");
 
-  const assigned = latest.filter(device => device.user_id !== null && matches(device));
-  const unassigned = latest.filter(device => device.user_id === null && matches(device));
+  const assigned = latest.filter(device => device.user_ids.length > 0 && matches(device));
+  const unassigned = latest.filter(device => !device.user_ids.length && matches(device));
   $("devices").replaceChildren(...assigned.map(device => deviceRow(device)));
   $("unassigned").replaceChildren(...unassigned.map(device => deviceRow(device)));
   if (!assigned.length) $("devices").append(node("p", "Nessun dispositivo assegnato nell’ultima lettura.", "notice"));
@@ -209,7 +248,7 @@ function renderPeople() {
   container.replaceChildren();
   for (const user of state.users) {
     const target = "users/" + user.id;
-    const devices = state.devices.filter(device => device.user_id === user.id);
+    const devices = state.devices.filter(device => device.user_ids.includes(user.id));
     const online = state.last_poll && !state.last_error
       ? " · " + devices.filter(device => device.online && device.in_latest_snapshot).length + " online" : "";
     const heading = add(node("div", undefined, "row"),
@@ -384,20 +423,21 @@ function accessSection(user, path) {
 }
 
 function profileDevices(user) {
-  const associated = state.devices.filter(device => device.user_id === user.id);
-  const available = state.devices.filter(device => device.user_id !== user.id);
+  const associated = state.devices.filter(device => device.user_ids.includes(user.id));
+  const available = state.devices.filter(device => !device.user_ids.includes(user.id));
   const section = panel("Dispositivi associati");
+  section.append(node("p", "Un dispositivo condiviso segue le regole applicabili di tutti i suoi profili.", "notice"));
   if (!associated.length) section.append(node("p", "Nessun dispositivo assegnato.", "notice"));
   section.append(...associated.map(device => deviceRow(device, user)));
   if (available.length) {
     const picker = select([["", "Scegli un dispositivo"], ...available.map(device => [
-      device.mac, [device.name, device.user_name].filter(Boolean).join(" · ")
+      device.mac, [deviceLabel(device), ...device.user_names].join(" · ")
     ])], "");
     picker.required = true;
-    const form = add(node("form", undefined, "controls"), field("Aggiungi o sposta", picker), submit("Assegna"));
+    const form = add(node("form", undefined, "controls"), field("Aggiungi un dispositivo", picker), submit("Assegna"));
     form.onsubmit = event => {
       event.preventDefault();
-      save("assign", "POST", {mac: picker.value, user_id: user.id});
+      save("users/" + user.id + "/devices/" + encodeURIComponent(picker.value), "PUT");
     };
     section.append(form);
   }
@@ -549,6 +589,7 @@ function showView() {
   report.href = "#statistiche";
   report.onclick = () => {
     $("report-user").value = user.id;
+    $("report-device").value = "";
     filterReportDevices();
     loadReport();
   };
@@ -567,9 +608,9 @@ function showView() {
 function filterReportDevices() {
   const current = $("report-device");
   const user = Number($("report-user").value);
-  const options = state.devices.filter(device => !user || device.user_id === user);
+  const options = state.devices.filter(device => !user || device.user_ids.includes(user));
   const chosen = options.some(device => device.mac === current.value) ? current.value : "";
-  const next = select([["", "Tutti i dispositivi"], ...options.map(device => [device.mac, device.name])], chosen);
+  const next = select([["", "Tutti i dispositivi"], ...options.map(device => [device.mac, deviceLabel(device)])], chosen);
   current.replaceChildren(...next.children);
   current.value = chosen;
 }
@@ -580,11 +621,48 @@ function table(headings, rows) {
     cell.scope = "col";
     return cell;
   })));
-  const body = add(node("tbody"), ...rows.map(row => add(node("tr"), ...row.map(value => node("td", value)))));
+  const body = add(node("tbody"), ...rows.map(row => add(node("tr"), ...row.map((value, index) => {
+    const cell = value instanceof Node ? add(node("td"), value) : node("td", value);
+    cell.dataset.label = headings[index];
+    return cell;
+  }))));
   return add(node("div", undefined, "tablewrap"), add(node("table"), head, body));
 }
 
-function renderReport(result, hasDevice) {
+function sortReport(rows) {
+  const key = $("report-sort").value;
+  const direction = Number($("report-direction").value);
+  return [...rows].sort((a, b) => {
+    const first = a[key], second = b[key];
+    if (first == null || second == null) return Number(first == null) - Number(second == null);
+    const order = key === "name" ? first.localeCompare(second, "it") : first - second;
+    return direction * order || a.name.localeCompare(b.name, "it");
+  });
+}
+
+function speedCells(row) {
+  return [showSpeed(row.average_down_kbs) + " / " + showSpeed(row.max_down_kbs),
+    showSpeed(row.average_up_kbs) + " / " + showSpeed(row.max_up_kbs),
+    (row.down_samples ?? 0) + " / " + (row.up_samples ?? 0)];
+}
+
+function renderPresenceChart(rows, title) {
+  const chart = node("ul", undefined, "chart");
+  const max = rows.reduce((largest, row) => Math.max(largest, row.minutes), 1);
+  for (const row of [...rows].reverse().slice(-30)) {
+    const date = row.day.split("-").reverse().join("/");
+    const meter = node("meter");
+    meter.min = 0;
+    meter.max = max;
+    meter.value = row.minutes;
+    meter.setAttribute("aria-label", date + " · " + title);
+    chart.append(add(node("li"), node("span", date), meter, node("span", row.minutes + " min")));
+  }
+  return add(node("section"), node("h3", "Presenza giornaliera · " + title),
+    node("p", "Fino a 30 giorni con campioni disponibili.", "notice"), chart);
+}
+
+function renderReport(result, userId, mac) {
   const retention = $("retention-days");
   retention.value = result.retention_override ?? "";
   retention.options[0].textContent = "Usa le impostazioni dell’app (" +
@@ -593,44 +671,79 @@ function renderReport(result, hasDevice) {
   const history = $("history");
   history.replaceChildren();
   $("report-source").textContent = [
-    result.source + " · polling ogni " + result.poll_seconds + " s",
+    result.source + " · letture ogni " + result.poll_seconds + " s",
     result.start + " — " + result.end + " · " + result.timezone,
     result.retention_days ? "Conservazione " + result.retention_days + " giorni" : "Conservazione senza scadenza",
   ].join(" · ");
+
+  const speedHeadings = ["Download medio / max", "Upload medio / max", "Campioni ↓ / ↑"];
+  const devicesByMac = new Map(state.devices.map(device => [device.mac, device]));
+  const deviceTotals = new Map(result.device_totals.map(row => [row.mac, row]));
+  const profileTotals = new Map(result.profile_totals.map(row => [row.user_id, row]));
+  const selectedDevices = state.devices.filter(device => (!userId || device.user_ids.includes(userId)) &&
+    (!mac || device.mac === mac));
+  const selectedProfiles = state.users.filter(user => (!userId || user.id === userId) &&
+    (!mac || devicesByMac.get(mac)?.user_ids.includes(user.id)));
+  const deviceRows = sortReport(selectedDevices.map(device => ({
+    ...deviceTotals.get(device.mac), device, name: deviceLabel(device)
+  })));
+  const profileRows = sortReport(selectedProfiles.map(user => ({
+    ...profileTotals.get(user.id), user, name: user.name
+  })));
+
+  if (mac && selectedDevices.length) {
+    const [device] = selectedDevices;
+    const current = state.last_poll && !state.last_error && device.in_latest_snapshot;
+    const status = current ? (device.online ? "Online" : "Offline") : "Stato non aggiornato";
+    history.append(add(node("article", undefined, "card"), node("h3", deviceLabel(device)),
+      node("p", [device.alias && device.name, device.client_type, device.ip, device.mac, status].filter(Boolean).join(" · ")),
+      node("p", "Ultimo campione disponibile nella lettura corrente · ↓ " + showSpeed(current ? device.down_kbs : null) +
+        " · ↑ " + showSpeed(current ? device.up_kbs : null), "notice")));
+  }
+  const summary = add(node("section", undefined, "stats-section"), node("h3", "Dispositivi · riepilogo del periodo"));
+  if (deviceRows.length) {
+    summary.append(table(["Dispositivo", "Ultima presenza online", "Giorni osservati", "Presenza", ...speedHeadings],
+      deviceRows.map(row => [deviceLink(row.device), clock(row.device.last_online) || "n/d",
+        row.observed_days ?? 0, row.minutes == null ? "n/d" : row.minutes + " min", ...speedCells(row)])));
+  } else summary.append(node("p", "Nessun dispositivo per questi filtri.", "notice"));
+  history.append(summary);
+
+  const people = add(node("section", undefined, "stats-section"), node("h3", "Persone · statistiche aggregate"),
+    node("p", "Ogni profilo conta una sola volta i minuti sovrapposti. Un dispositivo condiviso contribuisce a ogni profilo associato. Le medie usano tutti i campioni di velocità disponibili dei dispositivi inclusi.", "notice"));
+  if (profileRows.length) {
+    people.append(table(["Profilo", "Dispositivi osservati", "Giorni osservati", "Presenza", ...speedHeadings],
+      profileRows.map(row => [row.name, row.observed_devices ?? 0, row.observed_days ?? 0,
+        row.minutes == null ? "n/d" : row.minutes + " min", ...speedCells(row)])));
+  } else people.append(node("p", "Nessun profilo per questi filtri.", "notice"));
+  history.append(people);
+
   if (!result.data.length) {
     history.append(node("p", "Nessun campione disponibile per questo periodo e questi filtri.", "notice"));
     return;
   }
-  history.append(node("p", "Un minuto viene contato una sola volta per persona tra i dispositivi assegnati oggi. I campioni mancanti restano assenti. Le velocità sono istantanee e la loro media usa solo i campioni disponibili.", "notice"));
-  const profileName = id => state.users.find(user => user.id === id)?.name || "Profilo";
-  const deviceName = mac => state.devices.find(device => device.mac === mac)?.name || mac;
-  const byProfile = !hasDevice && result.profiles.length > 0;
-  const values = byProfile ? result.profiles : result.data;
-  const max = values.reduce((largest, row) => Math.max(largest, row.minutes), 1);
-  const chart = node("ul", undefined, "chart");
-  for (const row of [...values].reverse().slice(-30)) {
-    const label = byProfile ? profileName(row.user_id) : deviceName(row.mac);
-    const meter = node("meter");
-    meter.min = 0;
-    meter.max = max;
-    meter.value = row.minutes;
-    meter.setAttribute("aria-label", row.day + " · " + label);
-    const legend = node("span", row.day.slice(5));
-    legend.title = label;
-    chart.append(add(node("li"), legend, meter, node("span", row.minutes + " min")));
+  if (mac && deviceRows.length) history.append(renderPresenceChart(result.data, deviceRows[0].name));
+  else if (userId && profileRows.length) history.append(renderPresenceChart(result.profiles, profileRows[0].name));
+  else history.append(renderPresenceChart(result.network_days, "Almeno un dispositivo online"));
+
+  const daily = details("Dettaglio giornaliero");
+  const dailyRows = result.data.map(row => ({
+    ...row, name: deviceLabel(devicesByMac.get(row.mac) || {name: row.mac})
+  }));
+  const ordered = sortReport(dailyRows);
+  let displayed = 0;
+  const list = node("div");
+  const more = button("Mostra altre righe", () => showMore());
+  function showMore() {
+    const next = ordered.slice(displayed, displayed + 50);
+    list.append(table(["Giorno", "Dispositivo", "Presenza", ...speedHeadings],
+      next.map(row => [row.day.split("-").reverse().join("/"), row.name, row.minutes + " min", ...speedCells(row)])));
+    displayed += next.length;
+    more.hidden = displayed >= ordered.length;
   }
-  history.append(node("h3", "Presenza campionata · ultime 30 osservazioni giornaliere"), chart);
-  if (byProfile) {
-    history.append(table(["Giorno", "Persona", "Minuti distinti"], result.profiles.map(row =>
-      [row.day, profileName(row.user_id), row.minutes])));
-  }
-  history.append(table(["Giorno", "Dispositivo", "Presenza", "Download medio / max", "Upload medio / max", "Campioni ↓ / ↑"],
-    result.data.map(row => [
-      row.day, deviceName(row.mac), row.minutes + " min",
-      showSpeed(row.average_down_kbs) + " / " + showSpeed(row.max_down_kbs),
-      showSpeed(row.average_up_kbs) + " / " + showSpeed(row.max_up_kbs),
-      row.down_samples + " / " + row.up_samples,
-    ])));
+  showMore();
+  daily.open = Boolean(mac);
+  daily.append(list, more);
+  history.append(daily);
 }
 
 async function loadReport() {
@@ -650,7 +763,7 @@ async function loadReport() {
   if (mac) params.set("mac", mac);
   try {
     const result = await api("usage?" + params);
-    if (request === reportRequest) renderReport(result, Boolean(mac));
+    if (request === reportRequest) renderReport(result, Number(user), mac);
   } catch (error) {
     if (request === reportRequest) message(error.message, true);
   }
@@ -739,13 +852,17 @@ $("refresh").onclick = async () => {
 };
 
 $("device-filter").oninput = () => { if (state) renderInventory(); };
-$("report-user").onchange = filterReportDevices;
+$("report-user").onchange = () => { filterReportDevices(); loadReport(); };
+$("report-device").onchange = loadReport;
+$("report-sort").onchange = loadReport;
+$("report-direction").onchange = loadReport;
 $("report-period").onchange = () => {
   const custom = $("report-period").value === "custom";
   for (const label of document.querySelectorAll(".report-date")) {
     label.hidden = !custom;
     label.querySelector("input").required = custom;
   }
+  if (!custom) loadReport();
 };
 $("report-form").onsubmit = event => { event.preventDefault(); loadReport(); };
 $("sample-retention").onsubmit = async event => {
