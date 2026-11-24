@@ -25,6 +25,10 @@ summary{cursor:pointer;color:var(--accent);margin-bottom:10px}details:not([open]
   #history td::before{content:attr(data-label);color:var(--muted)}
   #history td:last-child{border:0}
 }
+.coverage-list{display:grid;gap:7px;max-height:280px;overflow:auto;padding:4px 0;list-style:none}
+.coverage-list li{display:grid;grid-template-columns:110px minmax(55px,1fr);align-items:center;gap:4px 10px;font-size:.84rem}
+.coverage-list small{grid-column:2}.coverage-bars{display:flex;height:10px;border-radius:6px;overflow:hidden;background:var(--line)}
+.coverage-bars .ok{background:#72d4d5}.coverage-bars .failed{background:#ffb6b2}
 </style>
 <script src="dns.js" defer></script>
 <script src="dashboard.js" defer></script>

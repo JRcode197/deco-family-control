@@ -12,6 +12,7 @@ const reasons = {
 };
 let state;
 let reportRequest = 0;
+let loadedReport;
 let viewRequest = 0;
 
 function node(tag, text, className) {
@@ -217,7 +218,7 @@ function renderInventory() {
       latest.filter(device => device.online).length + " online" : state.last_error || "In attesa della prima lettura.",
     !current && time ? "Ultima lettura riuscita " + time : "",
     state.inventory_setup_required ? "Completa la configurazione dell’app in Home Assistant e riavvia." : "",
-    state.ha_ingress && state.mode === "mock" ? "Attiva l’inventario nelle opzioni dell’app per leggere il Deco." : ""
+    state.ha_ingress && state.mode === "mock" ? "Attiva l’inventario nelle opzioni dell’app per leggere il Deco. La simulazione ha dati separati e persistenti." : ""
   ].filter(Boolean).join(" · ");
 
   const assigned = latest.filter(device => device.user_ids.length > 0 && matches(device));
@@ -607,8 +608,7 @@ function showView() {
 
 function filterReportDevices() {
   const current = $("report-device");
-  const user = Number($("report-user").value);
-  const options = state.devices.filter(device => !user || device.user_ids.includes(user));
+  const options = state.devices;
   const chosen = options.some(device => device.mac === current.value) ? current.value : "";
   const next = select([["", "Tutti i dispositivi"], ...options.map(device => [device.mac, deviceLabel(device)])], chosen);
   current.replaceChildren(...next.children);
@@ -662,6 +662,39 @@ function renderPresenceChart(rows, title) {
     node("p", "Fino a 30 giorni con campioni disponibili.", "notice"), chart);
 }
 
+function renderCoverage(result) {
+  const panel = add(node("section", undefined, "stats-section"), node("h3", "Copertura delle letture"),
+    node("p", "Copertura dell’intera rete. Un minuto con almeno una lettura riuscita conta come riuscito. Le fasce senza esito indicano un’assenza di osservazioni.", "notice"));
+  if (!result.coverage.length) {
+    panel.append(node("p", "Nessuna informazione sulla copertura per questo periodo.", "notice"));
+    return panel;
+  }
+  const hourly = result.start === result.end;
+  const dateFormat = new Intl.DateTimeFormat("it-IT", {
+    timeZone: result.timezone, hour: "2-digit", minute: "2-digit", timeZoneName: "short"
+  });
+  const max = result.coverage.reduce((largest, row) =>
+    Math.max(largest, row.successful_minutes + row.failure_only_minutes), 1);
+  const graph = node("ul", undefined, "coverage-list");
+  for (const row of result.coverage) {
+    const label = hourly ? dateFormat.format(new Date(row.bucket + ":00:00Z")) : row.bucket.split("-").reverse().join("/");
+    const text = row.successful_minutes || row.failure_only_minutes
+      ? row.successful_minutes + " min riusciti · " + row.failure_only_minutes + " min con solo errori"
+      : "Nessun esito registrato";
+    const bars = node("div", undefined, "coverage-bars");
+    bars.setAttribute("aria-hidden", "true");
+    for (const [kind, value] of [["ok", row.successful_minutes], ["failed", row.failure_only_minutes]]) {
+      const bar = node("span", undefined, kind);
+      bar.style.width = (100 * value / max) + "%";
+      bars.append(bar);
+    }
+    graph.append(add(node("li"), node("strong", label), bars, node("small", text)));
+  }
+  panel.append(node("p", "Prima del " + clock(result.coverage_start.replace("Z", ":00Z")) +
+    " la copertura non è disponibile.", "notice"), graph);
+  return panel;
+}
+
 function renderReport(result, userId, mac) {
   const retention = $("retention-days");
   retention.value = result.retention_override ?? "";
@@ -680,10 +713,11 @@ function renderReport(result, userId, mac) {
   const devicesByMac = new Map(state.devices.map(device => [device.mac, device]));
   const deviceTotals = new Map(result.device_totals.map(row => [row.mac, row]));
   const profileTotals = new Map(result.profile_totals.map(row => [row.user_id, row]));
-  const selectedDevices = state.devices.filter(device => (!userId || device.user_ids.includes(userId)) &&
+  const selectedDevices = state.devices.filter(device =>
+    (!userId || device.user_ids.includes(userId) || deviceTotals.has(device.mac)) &&
     (!mac || device.mac === mac));
   const selectedProfiles = state.users.filter(user => (!userId || user.id === userId) &&
-    (!mac || devicesByMac.get(mac)?.user_ids.includes(user.id)));
+    (!mac || devicesByMac.get(mac)?.user_ids.includes(user.id) || profileTotals.has(user.id)));
   const deviceRows = sortReport(selectedDevices.map(device => ({
     ...deviceTotals.get(device.mac), device, name: deviceLabel(device)
   })));
@@ -709,13 +743,17 @@ function renderReport(result, userId, mac) {
   history.append(summary);
 
   const people = add(node("section", undefined, "stats-section"), node("h3", "Persone · statistiche aggregate"),
-    node("p", "Ogni profilo conta una sola volta i minuti sovrapposti. Un dispositivo condiviso contribuisce a ogni profilo associato. Le medie usano tutti i campioni di velocità disponibili dei dispositivi inclusi.", "notice"));
+    node("p", "Ogni profilo conta una sola volta i minuti sovrapposti. L’attribuzione usa le assegnazioni registrate per ciascun minuto. Le medie usano i campioni di velocità disponibili.", "notice"));
+  if (result.start <= result.profile_history_since.slice(0, 10)) {
+    people.append(node("p", "Le assegnazioni storiche sono disponibili dal " +
+      clock(result.profile_history_since.replace("Z", ":00Z")) + ". I campioni precedenti restano visibili per dispositivo.", "notice"));
+  }
   if (profileRows.length) {
     people.append(table(["Profilo", "Dispositivi osservati", "Giorni osservati", "Presenza", ...speedHeadings],
       profileRows.map(row => [row.name, row.observed_devices ?? 0, row.observed_days ?? 0,
         row.minutes == null ? "n/d" : row.minutes + " min", ...speedCells(row)])));
   } else people.append(node("p", "Nessun profilo per questi filtri.", "notice"));
-  history.append(people);
+  history.append(people, renderCoverage(result));
 
   if (!result.data.length) {
     history.append(node("p", "Nessun campione disponibile per questo periodo e questi filtri.", "notice"));
@@ -763,7 +801,10 @@ async function loadReport() {
   if (mac) params.set("mac", mac);
   try {
     const result = await api("usage?" + params);
-    if (request === reportRequest) renderReport(result, Number(user), mac);
+    if (request === reportRequest) {
+      loadedReport = {request, result, userId: Number(user), mac};
+      renderReport(result, loadedReport.userId, mac);
+    }
   } catch (error) {
     if (request === reportRequest) message(error.message, true);
   }
@@ -854,8 +895,13 @@ $("refresh").onclick = async () => {
 $("device-filter").oninput = () => { if (state) renderInventory(); };
 $("report-user").onchange = () => { filterReportDevices(); loadReport(); };
 $("report-device").onchange = loadReport;
-$("report-sort").onchange = loadReport;
-$("report-direction").onchange = loadReport;
+function resortReport() {
+  if (loadedReport?.request === reportRequest) {
+    renderReport(loadedReport.result, loadedReport.userId, loadedReport.mac);
+  }
+}
+$("report-sort").onchange = resortReport;
+$("report-direction").onchange = resortReport;
 $("report-period").onchange = () => {
   const custom = $("report-period").value === "custom";
   for (const label of document.querySelectorAll(".report-date")) {

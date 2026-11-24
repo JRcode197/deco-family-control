@@ -280,11 +280,11 @@ def profiles_router(store, settings, engine, authenticate, mutation_guard) -> AP
             mac = normalize_mac(mac)
         except ValueError:
             raise HTTPException(422, "Indirizzo MAC non valido.") from None
-        with store.policy_change("assegnazione_dispositivo", f"profilo={user_id}") as db:
+        with store.policy_change("assegnazione_dispositivo", f"profilo={user_id}"):
             profile(user_id)
             if not store.query("SELECT mac FROM devices WHERE mac=?", (mac,)):
                 raise HTTPException(404, "Dispositivo non trovato.")
-            db.execute("INSERT OR IGNORE INTO device_profiles(mac,user_id) VALUES (?,?)", (mac, user_id))
+            store.change_device_profiles(mac, {user_id}, datetime.now(zone), add_only=True)
         return after_change()
 
     @router.put("/{user_id}/devices/{mac}/exception", dependencies=mutating)

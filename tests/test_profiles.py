@@ -30,7 +30,7 @@ def ha_client(tmp_path, monkeypatch):
                 return cls.instant.replace(tzinfo=None)
             return cls.instant.astimezone(tz)
 
-    for module in ("main", "engine", "profiles"):
+    for module in ("main", "engine", "profiles", "store"):
         monkeypatch.setattr(f"app.{module}.datetime", Clock)
     snapshots = [
         Client(DEVICE_1, "iPhone", "192.168.1.2", True, "phone", up_kbs=0, down_kbs=40),
@@ -187,7 +187,8 @@ def test_usage_report_does_not_invent_missing_speed_data(ha_client):
         assert client.get("/api/usage").json()["data"] == []
 
 
-def test_migrate_legacy_sqlite_and_prune_observations(tmp_path):
+def test_migrate_legacy_sqlite_and_prune_observations(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.store.utc_minute", lambda _: "2026-11-24T00:00Z")
     path = str(tmp_path / "legacy.sqlite")
     with sqlite3.connect(path) as legacy:
         legacy.executescript("""
@@ -209,7 +210,8 @@ def test_migrate_legacy_sqlite_and_prune_observations(tmp_path):
         assert store.users()[0]["avatar"] == ""
         assert store.windows()[0]["kind"] == "offtime"
         assert store.devices()[0]["last_online"] == "2026-11-23T19:05:00+00:00"
-        assert store.usage("2026-11-23")["users"] == {1: 1}
+        assert store.usage("2026-11-23")["devices"] == {DEVICE_1: 1}
+        assert store.usage("2026-11-23")["users"] == {}
         store.close()
     store = Store(path)
     store.prune_samples(1, "2026-11-24")
@@ -290,3 +292,52 @@ def test_shared_device_alias_and_period_aggregates_survive_restart(ha_client):
         assert device()["user_ids"] == [second] and device()["profile_exemptions"] == []
         restarted.put(shared + "/alias", json={"alias": ""}).raise_for_status()
         assert device()["alias"] == ""
+
+
+def test_historical_assignment_uses_profile_at_sample_minute(ha_client):
+    connect, _, clock = ha_client
+    with connect() as client:
+        client.post("/api/refresh").raise_for_status()
+        first = client.post("/api/users", json={"name": "Primo"}).json()["id"]
+        second = client.post("/api/users", json={"name": "Secondo"}).json()["id"]
+        path = f"/api/devices/{DEVICE_1}/profiles"
+        client.put(path, json={"user_ids": [first]}).raise_for_status()
+        clock.instant += timedelta(minutes=1)
+        client.put(path, json={"user_ids": [first, second]}).raise_for_status()
+        client.post("/api/refresh").raise_for_status()
+        clock.instant += timedelta(minutes=1)
+        client.put(path, json={"user_ids": [second]}).raise_for_status()
+        client.post("/api/refresh").raise_for_status()
+    with connect() as restarted:
+        result = restarted.get(f"/api/usage?days=1&mac={DEVICE_1}").raise_for_status().json()
+        assert result["device_totals"][0]["minutes"] == 3
+        assert {row["user_id"]: row["minutes"] for row in result["profile_totals"]} == {first: 2, second: 2}
+        result = restarted.get(f"/api/usage?days=1&user_id={first}").raise_for_status().json()
+        assert result["device_totals"][0]["minutes"] == 2
+        assert result["profile_history_since"] == "2026-11-23T20:00Z"
+
+
+def test_inventory_report_distinguishes_error_and_gap_and_honors_deletion(ha_client, monkeypatch):
+    connect, _, clock = ha_client
+    clock.instant = clock.instant.replace(hour=18)
+    with connect() as client:
+        client.post("/api/refresh").raise_for_status()
+        engine = client.app.state.engine
+
+        def unavailable():
+            raise RuntimeError("simulated transport failure")
+
+        monkeypatch.setattr(engine.adapter, "clients", unavailable)
+        # A successful observation takes precedence over a failed retry in the same minute.
+        assert client.post("/api/refresh").status_code == 503
+        clock.instant += timedelta(hours=2)
+        assert client.post("/api/refresh").status_code == 503
+        result = client.get("/api/usage?days=1").raise_for_status().json()
+        assert result["coverage_start"] == "2026-11-23T17:00Z"
+        assert result["coverage"] == [
+            {"bucket": "2026-11-23T17", "successful_minutes": 1, "failure_only_minutes": 0},
+            {"bucket": "2026-11-23T18", "successful_minutes": 0, "failure_only_minutes": 0},
+            {"bucket": "2026-11-23T19", "successful_minutes": 0, "failure_only_minutes": 1},
+        ]
+        client.delete("/api/usage").raise_for_status()
+        assert client.get("/api/usage?days=1").json()["coverage"] == []

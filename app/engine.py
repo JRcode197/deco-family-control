@@ -8,6 +8,8 @@ from app.deco import Adapter, Client, HomeAssistantGuardActuator
 from app.diagnostics import Diagnostics, PROBE_INTERVAL_SECONDS, ProbeCooldown
 from app.policy import device_reason, local_day, pending, policy_reason, profile_reason
 
+from app.store import utc_minute
+
 log = logging.getLogger(__name__)
 
 
@@ -41,9 +43,9 @@ class Engine:
 
     def poll(self, now: datetime | None = None) -> dict:
         with self.lock:
+            zone = ZoneInfo(self.settings.timezone)
+            day = local_day(now or datetime.now(zone), self.settings.timezone)
             try:
-                zone = ZoneInfo(self.settings.timezone)
-                day = local_day(now or datetime.now(zone), self.settings.timezone)
                 with self.store.lock:
                     selected = self.store.sample_retention()
                     days = self.settings.retention_days if selected is None else selected
@@ -53,19 +55,21 @@ class Engine:
                 clients = self.adapter.clients()
                 now = now or datetime.now(zone)
                 day = local_day(now, self.settings.timezone)
-                minute = now.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%MZ")
+                minute = utc_minute(now)
                 with self.store.lock:
                     self.store.record_inventory(clients, now.isoformat(), day, minute)
                     self.last_poll = now.isoformat()
                     self.last_sample_minute = minute
                     self.last_error = ""
-                actions = [] if self.settings.ha_ingress and self.settings.mode == "deco" else self.enforce(now)
-                return {"clients": len(clients), "actions": actions}
             except Exception:
+                failed = now or datetime.now(zone)
                 with self.store.lock:
                     self.last_error = "Interrogazione non riuscita. Controlla la diagnostica."
+                    self.store.record_inventory_failure(local_day(failed, self.settings.timezone), utc_minute(failed))
                     self.store.log("poll", "errore", detail=self.last_error)
                 raise
+            actions = [] if self.settings.ha_ingress and self.settings.mode == "deco" else self.enforce(now)
+            return {"clients": len(clients), "actions": actions}
 
     def enforce(self, now: datetime | None = None) -> list[dict]:
         with self.lock:

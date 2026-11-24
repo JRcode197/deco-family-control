@@ -15,7 +15,8 @@ def test_two_devices_same_user_minutes_count_once(tmp_path):
     engine.poll(now)
     uid = store.execute("INSERT INTO users(name) VALUES (?)", ("Alice",))
     for c in adapter.clients():
-        store.execute("INSERT INTO device_profiles(user_id,mac) VALUES (?,?)", (uid, c.mac))
+        with store.policy_change("assign", ""):
+            store.change_device_profiles(c.mac, {uid}, now)
     engine.poll(now)
     used = store.usage("2026-11-23")
     assert used["users"][uid] == 1

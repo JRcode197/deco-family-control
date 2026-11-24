@@ -72,6 +72,16 @@ CREATE TABLE IF NOT EXISTS minute_samples (
 );
 CREATE INDEX IF NOT EXISTS ix_sample_mac_day ON minute_samples (mac, day);
 CREATE INDEX IF NOT EXISTS ix_sample_day ON minute_samples (day);
+CREATE TABLE IF NOT EXISTS inventory_observations (
+  minute TEXT PRIMARY KEY,
+  day TEXT NOT NULL,
+  succeeded INTEGER NOT NULL CHECK (succeeded IN (0,1))
+);
+CREATE INDEX IF NOT EXISTS ix_inventory_observations_day ON inventory_observations(day,minute);
+CREATE TABLE IF NOT EXISTS metadata (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS sample_retention (
   id INTEGER PRIMARY KEY CHECK(id=1),
   days INTEGER NOT NULL CHECK(days IN (0,7,30,90,180))
@@ -82,6 +92,15 @@ CREATE TABLE IF NOT EXISTS audit (
   status TEXT NOT NULL, detail TEXT NOT NULL DEFAULT ''
 );
 """
+
+
+def utc_minute(now: datetime) -> str:
+    return now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
+
+
+# "s" denotes a device sample and "p" the membership effective in its UTC minute.
+MEMBERSHIP_AT_SAMPLE = """p.mac=s.mac AND p.start_minute<=s.minute
+    AND (p.end_minute IS NULL OR s.minute<p.end_minute)"""
 
 
 class Store:
@@ -136,6 +155,21 @@ class Store:
                     self.db.execute("""INSERT INTO device_profiles(mac,user_id,exempt)
                         SELECT d.mac,d.user_id,d.profile_exempt FROM devices d JOIN users u ON u.id=d.user_id""")
 
+                if not self.db.execute("SELECT 1 FROM sqlite_master WHERE name='device_profile_history'").fetchone():
+                    self.db.execute("""CREATE TABLE device_profile_history (
+                        mac TEXT NOT NULL REFERENCES devices(mac) ON DELETE CASCADE,
+                        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        start_minute TEXT NOT NULL,
+                        end_minute TEXT CHECK (end_minute>=start_minute),
+                        PRIMARY KEY (mac,user_id,start_minute)
+                    )""")
+                    self.db.execute("""CREATE INDEX ix_device_profile_history_user
+                        ON device_profile_history(user_id,mac,start_minute)""")
+                    minute = utc_minute(datetime.now(timezone.utc))
+                    self.db.execute("INSERT INTO metadata(key,value) VALUES ('profile_history_since',?)", (minute,))
+                    self.db.execute("""INSERT INTO device_profile_history(mac,user_id,start_minute)
+                        SELECT mac,user_id,? FROM device_profiles""", (minute,))
+
     def query(self, sql: str, args: tuple = ()) -> list[dict]:
         with self.lock:
             return [dict(r) for r in self.db.execute(sql, args).fetchall()]
@@ -188,8 +222,38 @@ class Store:
             self.db.execute("INSERT INTO audit(time,action,status,detail) VALUES (?,?,?,?)",
                             (datetime.now(timezone.utc).isoformat(), action, "salvata", detail))
 
+    def change_device_profiles(self, mac: str, user_ids: set[int], now: datetime, *, add_only=False):
+        """Change current memberships and their history in the caller's transaction."""
+        current = {row["user_id"] for row in self.query("SELECT user_id FROM device_profiles WHERE mac=?", (mac,))}
+        removed = set() if add_only else current - user_ids
+        added = user_ids - current
+        minute = utc_minute(now)
+        last = self.query("""SELECT MAX(COALESCE(end_minute,start_minute)) AS minute
+            FROM device_profile_history WHERE mac=?""", (mac,))[0]["minute"]
+        minute = max(minute, last or minute)
+        self.db.executemany("DELETE FROM device_profiles WHERE mac=? AND user_id=?",
+                            ((mac, user_id) for user_id in removed))
+        self.db.executemany("""UPDATE device_profile_history SET end_minute=MAX(start_minute,?)
+            WHERE mac=? AND user_id=? AND end_minute IS NULL""",
+                            ((minute, mac, user_id) for user_id in removed))
+        self.db.executemany("INSERT INTO device_profiles(mac,user_id) VALUES (?,?)",
+                            ((mac, user_id) for user_id in added))
+        self.db.executemany("""INSERT INTO device_profile_history(mac,user_id,start_minute) VALUES (?,?,?)
+            ON CONFLICT(mac,user_id,start_minute) DO UPDATE SET end_minute=NULL""",
+                            ((mac, user_id, minute) for user_id in added))
+
+    def _record_observation(self, day: str, minute: str, succeeded: bool):
+        self.db.execute("""INSERT INTO inventory_observations(minute,day,succeeded) VALUES (?,?,?)
+            ON CONFLICT(minute) DO UPDATE SET succeeded=MAX(succeeded,excluded.succeeded)""",
+                        (minute, day, int(succeeded)))
+
+    def record_inventory_failure(self, day: str, minute: str):
+        with self.lock, self.db:
+            self._record_observation(day, minute, False)
+
     def record_inventory(self, clients: list[Client], seen_at: str, local_day: str, minute: str):
         with self.lock, self.db:
+            self._record_observation(local_day, minute, True)
             # Devices omitted from a successful snapshot keep their assignments and history.
             self.db.execute("UPDATE devices SET online=0 WHERE online=1")
             self.db.executemany("""INSERT INTO devices(mac,name,ip,online,client_type,last_seen,last_online)
@@ -206,8 +270,8 @@ class Store:
     def usage(self, day: str) -> dict:
         individual = self.query("""SELECT mac, COUNT(*) AS minutes FROM minute_samples
           WHERE day=? GROUP BY mac""", (day,))
-        collective = self.query("""SELECT p.user_id, COUNT(DISTINCT s.minute) AS minutes
-          FROM minute_samples s JOIN device_profiles p USING(mac)
+        collective = self.query(f"""SELECT p.user_id, COUNT(DISTINCT s.minute) AS minutes
+          FROM minute_samples s JOIN device_profile_history p ON {MEMBERSHIP_AT_SAMPLE}
           WHERE s.day=? GROUP BY p.user_id""", (day,))
         return {"devices": {x["mac"]: x["minutes"] for x in individual},
                 "users": {x["user_id"]: x["minutes"] for x in collective}}
@@ -216,39 +280,53 @@ class Store:
                      mac: str | None = None) -> dict:
         where = ["s.day BETWEEN ? AND ?"]
         args = [start.isoformat(), end.isoformat()]
-        if user_id is not None:
-            where.append("EXISTS (SELECT 1 FROM device_profiles p WHERE p.mac=s.mac AND p.user_id=?)")
-            args.append(user_id)
         if mac is not None:
             where.append("s.mac=?")
             args.append(mac)
-        scope = " AND ".join(where)
+        base_scope = " AND ".join(where)
+        device_scope = base_scope
+        device_args = tuple(args)
+        if user_id is not None:
+            device_scope += f" AND EXISTS (SELECT 1 FROM device_profile_history p WHERE {MEMBERSHIP_AT_SAMPLE} AND p.user_id=?)"
+            device_args += (user_id,)
         speeds = """COUNT(up_kbs) AS up_samples, COUNT(down_kbs) AS down_samples,
             ROUND(AVG(up_kbs), 1) AS average_up_kbs, ROUND(AVG(down_kbs), 1) AS average_down_kbs,
             MAX(up_kbs) AS max_up_kbs, MAX(down_kbs) AS max_down_kbs"""
         profile_filter = " AND p.user_id=?" if user_id is not None else ""
         profile_args = (*args, user_id) if user_id is not None else tuple(args)
         membership = ("?" if user_id is not None else
-                      "(SELECT MIN(p.user_id) FROM device_profiles p WHERE p.mac=s.mac)")
-        device_args = (user_id, *args) if user_id is not None else tuple(args)
+                      f"(SELECT MIN(p.user_id) FROM device_profile_history p WHERE {MEMBERSHIP_AT_SAMPLE})")
+        daily_args = (*device_args, user_id) if user_id is not None else device_args
         with self.lock:
-            devices = self.query(f"""SELECT s.day, {membership} AS user_id, s.mac,
-                COUNT(*) AS minutes, {speeds} FROM minute_samples s WHERE {scope}
-                GROUP BY s.day,s.mac ORDER BY s.day DESC,s.mac""", device_args)
+            devices = self.query(f"""WITH daily AS (
+                SELECT s.day,s.mac,MAX(s.minute) AS minute,COUNT(*) AS minutes,{speeds}
+                FROM minute_samples s WHERE {device_scope} GROUP BY s.day,s.mac
+            ) SELECT s.day,{membership} AS user_id,s.mac,s.minutes,
+                s.up_samples,s.down_samples,s.average_up_kbs,s.average_down_kbs,s.max_up_kbs,s.max_down_kbs
+                FROM daily s ORDER BY s.day DESC,s.mac""", daily_args)
             profiles = self.query(f"""SELECT s.day,p.user_id,COUNT(DISTINCT s.minute) AS minutes
-                FROM minute_samples s JOIN device_profiles p USING(mac) WHERE {scope}{profile_filter}
+                FROM minute_samples s JOIN device_profile_history p ON {MEMBERSHIP_AT_SAMPLE} WHERE {base_scope}{profile_filter}
                 GROUP BY s.day,p.user_id ORDER BY s.day DESC,p.user_id""", profile_args)
             device_totals = self.query(f"""SELECT s.mac,COUNT(*) AS minutes,
                 COUNT(DISTINCT s.day) AS observed_days, {speeds}
-                FROM minute_samples s WHERE {scope} GROUP BY s.mac""", tuple(args))
+                FROM minute_samples s WHERE {device_scope} GROUP BY s.mac""", device_args)
             profile_totals = self.query(f"""SELECT p.user_id,COUNT(DISTINCT s.minute) AS minutes,
                 COUNT(DISTINCT s.day) AS observed_days,COUNT(DISTINCT s.mac) AS observed_devices, {speeds}
-                FROM minute_samples s JOIN device_profiles p USING(mac) WHERE {scope}{profile_filter}
+                FROM minute_samples s JOIN device_profile_history p ON {MEMBERSHIP_AT_SAMPLE} WHERE {base_scope}{profile_filter}
                 GROUP BY p.user_id""", profile_args)
             network_days = self.query(f"""SELECT s.day,COUNT(DISTINCT s.minute) AS minutes
-                FROM minute_samples s WHERE {scope} GROUP BY s.day ORDER BY s.day DESC""", tuple(args))
+                FROM minute_samples s WHERE {device_scope} GROUP BY s.day ORDER BY s.day DESC""", device_args)
+            coverage_start = self.query("SELECT MIN(minute) AS minute FROM inventory_observations")[0]["minute"]
+            # UTC hour buckets keep the two repeated hours of the DST transition distinct.
+            bucket = "substr(minute,1,13)" if start == end else "day"
+            coverage = self.query(f"""SELECT {bucket} AS bucket, SUM(succeeded) AS successful_minutes,
+                COUNT(*)-SUM(succeeded) AS failure_only_minutes FROM inventory_observations
+                WHERE day BETWEEN ? AND ? GROUP BY bucket ORDER BY bucket""",
+                (start.isoformat(), end.isoformat()))
+            profile_history_since = self.query("SELECT value FROM metadata WHERE key='profile_history_since'")[0]["value"]
         return {"data": devices, "profiles": profiles, "device_totals": device_totals,
-                "profile_totals": profile_totals, "network_days": network_days}
+                "profile_totals": profile_totals, "network_days": network_days,
+                "coverage": coverage, "coverage_start": coverage_start, "profile_history_since": profile_history_since}
 
     def daily_usage(self, days: int = 7, *, today: date | None = None) -> list[dict]:
         today = today or date.today()
@@ -267,7 +345,9 @@ class Store:
         if days == 0:
             return 0
         first_day = date.fromisoformat(today) - timedelta(days=days - 1)
-        return db.execute("DELETE FROM minute_samples WHERE day<?", (first_day.isoformat(),)).rowcount
+        cutoff = (first_day.isoformat(),)
+        db.execute("DELETE FROM inventory_observations WHERE day<?", cutoff)
+        return db.execute("DELETE FROM minute_samples WHERE day<?", cutoff).rowcount
 
     def set_sample_retention(self, days: int | None, fallback: int, today: str) -> int:
         with self.policy_change("conservazione_campioni", f"giorni={days if days is not None else fallback}") as db:
@@ -281,8 +361,11 @@ class Store:
     def clear_samples(self, through: date | None = None) -> int:
         with self.policy_change("cancellazione_campioni", "") as db:
             if through is None:
+                db.execute("DELETE FROM inventory_observations")
                 return db.execute("DELETE FROM minute_samples").rowcount
-            return db.execute("DELETE FROM minute_samples WHERE day<=?", (through.isoformat(),)).rowcount
+            cutoff = (through.isoformat(),)
+            db.execute("DELETE FROM inventory_observations WHERE day<=?", cutoff)
+            return db.execute("DELETE FROM minute_samples WHERE day<=?", cutoff).rowcount
 
     def close(self):
         with self.lock:
