@@ -19,3 +19,24 @@ jobs:
         run: pytest -q
       - name: Compile source
         run: python -m compileall -q app
+
+  addon:
+    name: Add-on (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Home Assistant app image
+        run: |
+          version=$(sed -n 's/^version: "\(.*\)"$/\1/p' config.yaml)
+          test -n "$version"
+          docker build --build-arg BUILD_ARCH=${{ matrix.arch }} --build-arg BUILD_VERSION="$version" -t deco-family-control:ci .
+      - name: Verify startup, Ingress and cold restore
+        run: bash tests/smoke_ha_container.sh deco-family-control:ci

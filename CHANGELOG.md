@@ -1,3 +1,9 @@
+## 0.5.0
+
+- Simulazione Home Assistant persistente in un database separato dall’inventario reale.
+- Attribuzione storica delle assegnazioni per minuto e grafico della copertura delle letture.
+- Verifica automatica di build, avvio, Ingress simulato e ripristino a freddo su amd64 e aarch64.
+
 ## 0.4.0
 
 - Dispositivi associabili a più profili e alias persistenti ricercabili.
