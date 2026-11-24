@@ -1,13 +1,13 @@
 # Deco Family Control — X50
 
-A **local-first, no-subscription** parental network policy prototype for TP-Link Deco. User profiles, device assignment, manual block policies, weekly blocking windows, observed Wi-Fi presence and local audit trail. Responsive web UI works in an iPhone browser. Data stays in local SQLite; neither children's data nor router credentials go to a SaaS service.
+Deco Family Control è un prototipo di controllo parentale della rete locale per TP-Link Deco, senza abbonamento. Offre profili, assegnazione dei dispositivi, regole di blocco manuali, fasce orarie settimanali, rilevamento della presenza in rete e un registro locale delle operazioni. L’interfaccia si adatta anche al browser di iPhone. I dati restano nel database SQLite locale e le credenziali del router rimangono nella configurazione protetta.
 
-> **Status: working mock/demo and unverified real Deco integration, not a tested protection product.** Do not rely on it to protect children until real traffic blocking and recovery have been verified on your X50. The program does **not** unlock paid HomeShield features, collect iOS screen time, measure true app usage, or provide detailed browsing history.
+> **Stato del progetto.** La simulazione è disponibile. L’efficacia dei comandi di blocco e ripristino va verificata sul proprio Deco X50 prima di usare l’app per proteggere la rete. Le funzioni a pagamento di HomeShield, il tempo di utilizzo su iOS, le metriche per singola app e la cronologia dettagliata dei siti sono fuori dall’ambito del progetto.
 
-## Requirements
+## Requisiti
 
-- TP-Link Deco X50 with access to its local web interface.
-- Home Assistant with app support or a local host running Docker. Keep the host online for scheduled rules.
+- TP-Link Deco X50 con accesso all’interfaccia web locale.
+- Home Assistant con supporto per le app oppure un host locale con Docker. Tieni acceso l’host per eseguire la programmazione.
 
 ## Funzionalità nella versione 0.3.0
 
@@ -20,69 +20,67 @@ A **local-first, no-subscription** parental network policy prototype for TP-Link
 
 Consulta le [istruzioni di installazione e aggiornamento](DOCS.md#installare-o-aggiornare-lapp-home-assistant), la [matrice delle funzionalità](DOCS.md#matrice-delle-funzionalità) e il [collaudo locale X50](DOCS.md#collaudo-fisico-deco-x50).
 
-## Non-goals and unresolved integration risks
+## Limiti e compatibilità da verificare
 
-1. `tplink-deco-api` 2.2.0 uses the Deco local API; use the read-only diagnostic to check inventory support for your firmware. `get_client_list()` may return incomplete/offline data. Credentials are the **admin web interface login** (often TP-Link ID) accepted by local firmware; do not assume `admin` works on every model.
-2. The SDK's `clients.block()` may change the router's block list **without enforcing the internet block** on some firmwares. [Deco Guard](https://github.com/leewsimpson/ha-deco-guard) reports that on BE85 an SSH/TMP app protocol is necessary. Its API may not work with X50; nothing in this project claims otherwise. Test actual internet reachability after block and after unblock.
-3. Current `managed_block` tracks accepted control commands, **not verified enforcement**. For strong enforcement use the `ha_guard` actuator only if the separate Home Assistant Deco Guard integration passes X50 tests. It is GPL-3.0 and is **not copied or bundled** here.
-4. HomeShield `patrol_insights` and DPI endpoints are documented but may be subscription gated. No attempt is made to circumvent paid functions. Sites and apps history require a separately configured DNS logger such as AdGuard Home and have privacy/coverage limits.
-5. iOS private MAC set to **Fisso** for home SSID. VPN, private relay, encrypted DNS and other Wi-Fi networks can bypass DNS-based controls. Router-based blocks operate only on traffic via this Deco, not cellular/offline apps.
-6. When the local host is down, new schedules are not enforced. Existing device blocks may persist on the router. Do not deploy to a machine which sleeps.
-7. Automatic Internet quotas remain unavailable on real hardware. The legacy presence-based quota is available only for standalone simulation.
+1. `tplink-deco-api` 2.2.0 usa le API locali del Deco. La diagnostica in sola lettura consente di verificare il supporto dell’inventario sul proprio firmware. `get_client_list()` può restituire dati incompleti o includere dispositivi offline. Usa le credenziali amministrative che funzionano nell’interfaccia web del router, spesso quelle dell’account TP-Link. Il nome utente API può variare in base al modello.
+2. Su alcuni firmware, `clients.block()` modifica la lista dei blocchi e l’accesso a Internet può rimanere disponibile. Deco Guard segnala che su BE85 serve il protocollo SSH/TMP usato dall’app. Verifica la raggiungibilità di Internet sul tuo X50 dopo il blocco e dopo lo sblocco. [Deco Guard](https://github.com/leewsimpson/ha-deco-guard)
+3. Il flag `managed_block` registra i comandi accettati. La verifica dell’effettivo blocco richiede una prova di connettività. Usa l’attuatore `ha_guard` solo dopo aver collaudato l’integrazione esterna Deco Guard su X50. Deco Guard è distribuito separatamente con licenza GPL-3.0.
+4. Gli endpoint `patrol_insights` e DPI di HomeShield possono richiedere un abbonamento. L’eventuale raccolta delle richieste DNS tramite un componente esterno come AdGuard Home ha limiti di copertura e di privacy.
+5. Su iOS puoi impostare l’indirizzo Wi-Fi privato su **Fisso** per la rete domestica. VPN, Relay privato, DNS cifrato e altre reti Wi-Fi possono aggirare il filtro DNS. I blocchi del router riguardano il traffico che passa dal Deco.
+6. La programmazione richiede che l’host locale sia acceso. I blocchi già applicati possono rimanere sul router anche quando l’host è spento.
+7. Le quote Internet automatiche sono indisponibili sull’hardware reale. La quota basata sulla presenza campionata è riservata alla simulazione autonoma.
 
-## Quickstart (safe simulation)
+<a id="quickstart-safe-simulation"></a>
+
+## Avvio rapido in simulazione
 
 ```sh
 cp .env.example .env
-# Replace ADMIN_PASSWORD with a long unique secret. Never commit .env.
+# Imposta ADMIN_PASSWORD con una password lunga e univoca. Escludi .env dai commit.
 docker compose up --build -d
-# On the host machine only:
+# Apri l’indirizzo dalla macchina che esegue il servizio.
 open http://127.0.0.1:8088
 ```
 
-Sign in with `ADMIN_USER` / `ADMIN_PASSWORD`. Create a profile, assign simulated devices, and create a schedule. `DECO_MODE=mock`, `DECO_WRITE_ENABLED=false`: **no changes to your router**. HTTP Basic is suitable only behind localhost or HTTPS/VPN; do not expose port 8088 publicly. To reach from iPhone, prefer an authenticated local HTTPS reverse proxy or private VPN such as Tailscale. The default port binding is deliberately loopback-only.
+Accedi con `ADMIN_USER` e `ADMIN_PASSWORD`. Crea un profilo, assegna i dispositivi simulati e aggiungi una fascia oraria. Con `DECO_MODE=mock` e `DECO_WRITE_ENABLED=false` l’app opera in simulazione e il router rimane in sola lettura. La porta 8088 ascolta solo su localhost per impostazione predefinita. Usa HTTP Basic su localhost oppure tramite HTTPS o VPN. Per accedere da iPhone puoi usare un proxy inverso locale con HTTPS e autenticazione o una VPN privata come Tailscale.
 
-## Staged, real-network X50 verification
+## Verifica del Deco X50 sulla rete locale
 
 ### Home Assistant
 
-On Home Assistant installations with the app store, add this repository, install **Deco Family Control**, and select **Start → Open web UI**. Home Assistant Ingress restricts access to administrators. Enable the optional read-only inventory in the app configuration to assign detected devices to people and persist the history across restarts. See [the Home Assistant instructions](DOCS.md).
+Nelle installazioni con lo store delle app, aggiungi questo repository, installa **Deco Family Control** e seleziona **Avvia → Apri interfaccia web**. Home Assistant Ingress limita l’accesso agli amministratori. Attiva l’inventario opzionale in sola lettura per assegnare i dispositivi rilevati e conservare lo storico dopo il riavvio. [Istruzioni per Home Assistant](DOCS.md)
 
-### Read-only diagnostics on the home LAN
+### Diagnostica in sola lettura
 
-**Deco X50 block-list response:** the local firmware may encode an empty `black_list` as `{"client_list": {}}`, not `{"client_list": []}`. The diagnostic accepts **only an empty object** as an empty list, yielding `blocklist.status=read_only_detected` and `count=0`. Missing data or nonempty unexpected objects remain `read_error`. An empty list does **not** mean the app's block/unblock commands enforce Internet denial; that still requires a physical test.
+**Lista dei blocchi.** Il firmware del Deco X50 può rappresentare una lista vuota come `{"client_list": {}}` oppure `{"client_list": []}`. La diagnostica accetta anche l’oggetto vuoto e restituisce `blocklist.status=read_only_detected` con `count=0`. Una risposta incompleta o un oggetto non vuoto di formato inatteso produce `read_error`. L’efficacia del blocco va verificata con una prova di connettività.
 
+**Autenticazione locale.** L’SDK usa una procedura di autenticazione firmata basata su `md5(username + password)`. Prova `admin` come nome utente API anche quando l’interfaccia web del Deco mostra solo il campo password. Usa la password dell’account TP-Link proprietario e verifica prima che funzioni sulla pagina web locale del router. Lo stato `authentication_failed` può dipendere dalle credenziali, da un protocollo incompatibile, da una sessione rifiutata o da un blocco temporaneo. Evita tentativi ripetuti. Se l’accesso web funziona e la diagnostica fallisce, condividi solo il JSON redatto, la revisione hardware e il firmware. Conserva password, token, cookie e log grezzi fuori da GitHub.
 
+1. Dalla rete domestica, avvia l’app seguendo la procedura di simulazione. Per questa verifica mantieni `DECO_MODE=mock` e `DECO_WRITE_ENABLED=false`. Nel file `.env` bastano le impostazioni di accesso alla dashboard e i valori predefiniti.
+2. Accedi alla dashboard. In **Diagnostica Deco X50** inserisci l’indirizzo IPv4 privato e le credenziali del Deco. Seleziona **Esegui verifica in sola lettura**. La verifica usa una sessione per leggere l’inventario, il firmware del gateway e la lista dei blocchi. Il campo della password si svuota dopo l’invio e l’app conserva in memoria solo il rapporto redatto.
+3. Apri **Risultato JSON**. Se segnali un problema su GitHub, condividi il rapporto redatto e la revisione hardware, se nota. Il rapporto contiene stati, conteggi e metadati riconosciuti del firmware. `/api/state`, le schermate e le copie del database possono contenere identificativi dei dispositivi.
 
-**Authentication note for Deco X50:** The local SDK uses a signed `md5(username + password)` handshake and its standard examples use `admin` as **API username**, even when the Deco browser login presents only a password field. Start with `admin` and the **owner TP-Link ID password**, not the person's name, Wi-Fi key, or dashboard password. First confirm the password works at the router's LAN web page. An `authentication_failed` status is not conclusive evidence that a password is wrong: an incompatible firmware protocol, a rejected session, or temporary lockout may produce a similar symptom. Avoid repeated attempts; if owner web login succeeds but API probing fails, report only the redacted JSON, X50 hardware revision and firmware. Do **not** put passwords, tokens, cookies or raw logs in GitHub. The probe never writes to the router.
+La richiesta autenticata `GET /api/diagnostics` restituisce l’ultimo rapporto conservato in memoria. La verifica manuale usa `POST /api/diagnostics/deco` con i campi JSON `router_ip`, `username` e `password` e richiede l’intestazione `X-Family-Action: 1`. Dopo un errore puoi correggere i dati e riprovare dopo un minuto. La diagnostica si collega direttamente all’indirizzo IPv4 indicato e rifiuta i reindirizzamenti. L’SDK usa HTTPS con la verifica del certificato disattivata per il router. Esegui la prova su una rete locale di fiducia.
 
+Per interrogare periodicamente il Deco in modalità autonoma, imposta `DECO_MODE=deco`, `DECO_ROUTER_IP`, `DECO_USERNAME` e `DECO_PASSWORD` nel file `.env` escluso da Git e ricrea il servizio. **Usa configurazione del server** esegue la verifica con quei valori. Se l’accesso viene rifiutato, correggi la configurazione e ricrea il servizio.
 
+### Collaudo fisico di blocco e sblocco
 
-1. On a machine connected to the home LAN, start the app using the Quickstart above. Keep `DECO_MODE=mock` and `DECO_WRITE_ENABLED=false` for this one-off check. The `.env` file only needs the usual dashboard login settings and defaults.
-2. Sign in to the local dashboard. In **Diagnostica Deco X50**, enter the Deco's private IPv4 address, username and password for its web interface. Choose **Esegui verifica in sola lettura**. The probe uses those details for one session covering the client inventory, gateway firmware, and blocklist. The password field clears on submission. The app retains only the redacted report in memory.
-3. Open **Risultato JSON** and return that JSON in the issue or PR, along with the hardware revision from the Deco app if known. The report contains statuses, counts, and recognized firmware metadata. Share only that report and the requested metadata. `/api/state`, screenshots and database exports can contain household device identifiers.
+La procedura usa un dispositivo di prova non essenziale, un dispositivo amministrativo indipendente e una verifica di ripristino. Registra l’accettazione dei comandi e le modifiche alla lista dei blocchi separatamente dall’esito delle prove di connettività. [Procedura di collaudo locale](DOCS.md#collaudo-fisico-deco-x50)
 
-The authenticated `GET /api/diagnostics` returns the latest report from memory. The manual check uses `POST /api/diagnostics/deco` with a JSON body containing `router_ip`, `username` and `password`. It requires `X-Family-Action: 1`. After a failed check, you can correct the form and submit again after one minute. Manual diagnostics connect directly to the selected IPv4 address and reject redirects. The pinned SDK uses HTTPS with certificate verification disabled for the router. Run the check on a trusted home LAN.
+### Matrice di compatibilità
 
-For continuous local polling, set `DECO_MODE=deco`, `DECO_ROUTER_IP`, `DECO_USERNAME` and `DECO_PASSWORD` in the ignored `.env` and recreate the service. **Usa configurazione del server** runs the probe using that configuration. After a rejected login in this mode, correct the configuration and recreate the service.
-
-### Separate physical block/unblock test
-
-The documented local procedure uses one spare client, an independent administration device and a recovery check. API success and blocklist changes are recorded separately from demonstrated Internet denial. See the [local verification procedure](DOCS.md#collaudo-fisico-deco-x50).
-
-### Compatibility matrix
-
-| Capability | SDK or integration evidence | Deco X50 compatibility |
+| Funzionalità | Evidenza disponibile | Compatibilità Deco X50 |
 | --- | --- | --- |
-| Client inventory and gateway firmware | SDK 2.2.0 documents local inventory and mesh device-list reads. The diagnostic checks them individually. | Run the read-only diagnostic to check inventory and firmware detection. HTTP 404 or 501 indicates an unavailable read endpoint. |
-| Blocklist visibility | `clients.get_blocked()` reads the mesh blocklist. The diagnostic validates the list shape and reports only its count. | Read-only check pending. |
-| Actual Internet block and recovery | `clients.block()` sends a blocklist operation. `clients.unblock()` sends the inverse operation. | **Unverified** until the separate physical test. |
-| Presence and sampled speeds | Presence counts minutes with an online inventory observation. SDK speed fields are instantaneous KB/s samples. SDK `get_client_totals()` sums speeds. | Instantaneous speed availability depends on the firmware response. Byte counters, iOS screen time and app/site history are unavailable in this integration. |
-| Optional Home Assistant Deco Guard | Separate GPL-3.0-or-later integration. Upstream reports testing on BE85 fw 1.2.4 and uses the app management protocol to complement the web API. | X50 compatibility and physical enforcement pending. |
+| Inventario dei client e firmware del gateway | L’SDK 2.2.0 documenta le letture locali dell’inventario e dell’elenco dei dispositivi mesh. La diagnostica le verifica separatamente. | Esegui la diagnostica in sola lettura per verificare il rilevamento. HTTP 404 o 501 indica che l’endpoint di lettura è indisponibile. |
+| Lettura della lista dei blocchi | `clients.get_blocked()` legge la lista dei blocchi della rete mesh. La diagnostica controlla il formato e restituisce solo il conteggio. | Da verificare in sola lettura. |
+| Blocco e ripristino di Internet | `clients.block()` invia il comando di blocco. `clients.unblock()` invia il comando inverso. | Da verificare con il collaudo fisico. |
+| Presenza e velocità campionate | La presenza conta i minuti in cui un dispositivo è stato osservato online. I campioni di velocità sono istantanei, in KB/s. `get_client_totals()` somma le velocità. | La disponibilità dei campioni dipende dal firmware. Byte trasferiti, tempo di utilizzo su iOS e cronologia di app e siti sono indisponibili. |
+| Integrazione opzionale Deco Guard per Home Assistant | Componente separato con licenza GPL-3.0 o successiva. Il progetto documenta prove su BE85 con firmware 1.2.4 e affianca il protocollo dell’app alle API web. | Compatibilità X50 ed efficacia del blocco da verificare. |
 
-## Development
+## Sviluppo
 
-Requires Python 3.14 for the real SDK, but mock tests use the basic requirements on Python 3.12+:
+L’SDK reale richiede Python 3.14. I test in simulazione usano le dipendenze di base con Python 3.12 o successivo.
 
 ```sh
 python -m venv .venv
@@ -92,22 +90,22 @@ ADMIN_PASSWORD=local-test-pass-not-for-production DATABASE_PATH=./var/family.sql
 pytest -q
 ```
 
-SDK install: `pip install -r requirements-deco.txt` using Python 3.14.
+Per installare l’SDK, esegui `pip install -r requirements-deco.txt` con Python 3.14.
 
-### Issue #1 review and test coverage
+### Analisi e copertura dei test dell’issue #1
 
-- The API uses HTTP Basic for the dashboard and protected routes, plus `X-Family-Action` for actions. The diagnostic's cached GET performs no router I/O. Neither the diagnostic nor the application's failure logs include raw SDK responses, exception messages or session URLs.
-- SQLite uses one connection guarded by a lock. Shutdown waits for the polling worker before closing it. Inventory snapshots and profile configuration changes commit as transactions. Tests cover additive migration, profile copy and restore, and expiry across restart.
-- Fake SDK sessions cover endpoint absence, empty and malformed results, credential failure, retry backoff, read-only operation selection and redaction. API tests cover authentication, the action header and result caching. Real firmware response shapes, device reachability, and sustained polling under concurrent requests require separate verification.
+- La dashboard e le rotte protette usano HTTP Basic. Le operazioni di modifica richiedono `X-Family-Action`. La lettura del rapporto salvato in memoria non interroga il router. I rapporti e i log di errore omettono risposte grezze dell’SDK, messaggi delle eccezioni e URL di sessione.
+- SQLite usa una connessione protetta da un lock. All’arresto, l’app attende la fine della lettura prima di chiudere la connessione. L’inventario e le modifiche ai profili vengono salvati in transazioni. I test coprono le migrazioni additive, la copia e il ripristino dei profili e la scadenza degli override dopo il riavvio.
+- Le sessioni SDK simulate coprono endpoint assenti, risultati vuoti o malformati, accessi rifiutati, attesa tra i tentativi, operazioni in sola lettura e redazione dei dati. I test API coprono autenticazione, intestazione per le modifiche e conservazione del risultato in memoria. Le risposte del firmware reale, la raggiungibilità dei client e le letture prolungate durante richieste concorrenti richiedono verifiche separate.
 
-## Next development tasks for Codex
+## Prossime attività di sviluppo
 
-See [`PRD.md`](PRD.md) and [`CODEX_START.md`](CODEX_START.md). Run the separate block/unblock field test and verify AdGuard Home client identity and DNS behavior on the home LAN. Effective quotas require an appropriate activity source. See the staged plan in the PRD.
+Esegui il collaudo separato di blocco e sblocco e verifica l’identificazione dei client e la risoluzione DNS di AdGuard Home sulla rete locale. Per applicare le quote servono misure attendibili dell’attività. Il piano è descritto nei documenti di progetto. [PRD](PRD.md) · [Avvio del lavoro con Codex](CODEX_START.md)
 
-## Third-party projects evaluated
+## Progetti di terze parti valutati
 
-- [`roquerodrigo/tplink-deco-api`](https://github.com/roquerodrigo/tplink-deco-api): MIT, typed Python SDK, documentation, tests; used as an **external dependency**, no code copied.
-- [`leewsimpson/ha-deco-guard`](https://github.com/leewsimpson/ha-deco-guard): GPL-3.0-or-later; useful evidence about block enforcement and possible **separate** optional Home Assistant integration, not vendored.
-- [`amosyuen/ha-tplink-deco`](https://github.com/amosyuen/ha-tplink-deco): Home Assistant integration for read-only client/health information; maintainer announced migration to `dkwolf1/ha-deco`; use as technical reference only.
+- SDK Python con tipi, documentazione e test, distribuito con licenza MIT e usato come dipendenza esterna. [tplink-deco-api](https://github.com/roquerodrigo/tplink-deco-api)
+- Integrazione esterna opzionale per Home Assistant, distribuita separatamente con licenza GPL-3.0 o successiva. Il progetto documenta il comportamento dei comandi di blocco. [ha-deco-guard](https://github.com/leewsimpson/ha-deco-guard)
+- Integrazione Home Assistant per leggere client e stato del router. Il manutentore ha annunciato la migrazione a `dkwolf1/ha-deco`. Il progetto è usato come riferimento tecnico. [ha-tplink-deco](https://github.com/amosyuen/ha-tplink-deco)
 
-This project is written independently under the MIT license. Use of third-party components remains governed by their own licenses.
+Deco Family Control è sviluppato in modo indipendente e distribuito con licenza MIT. I componenti esterni seguono le rispettive licenze.
