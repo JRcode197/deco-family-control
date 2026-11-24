@@ -16,6 +16,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, Field, SecretStr, StringConstraints, field_validator
 
 from app.config import Settings, from_env, private_router_ip, release_version
+from app.coverage import coverage_slots
 from app.deco import Adapter, MockAdapter, DecoSdkAdapter, normalize_mac
 from app.dns import dns_router
 from app.diagnostics import PROBE_INTERVAL_SECONDS, ProbeCooldown
@@ -249,16 +250,12 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
             raise HTTPException(422, "Indirizzo MAC non valido.") from None
 
     def replace_device_profiles(mac: str, user_ids: set[int]):
-        with store.policy_change("assegnazione_dispositivo", f"profili={len(user_ids)}") as db:
+        with store.policy_change("assegnazione_dispositivo", f"profili={len(user_ids)}"):
             if not store.query("SELECT mac FROM devices WHERE mac=?", (mac,)):
                 raise HTTPException(404, "Dispositivo non trovato. Aggiorna l’elenco.")
             if user_ids - {user["id"] for user in store.users()}:
                 raise HTTPException(404, "Profilo inesistente.")
-            current = {row["user_id"] for row in store.query("SELECT user_id FROM device_profiles WHERE mac=?", (mac,))}
-            db.executemany("DELETE FROM device_profiles WHERE mac=? AND user_id=?",
-                           ((mac, user_id) for user_id in current - user_ids))
-            db.executemany("INSERT INTO device_profiles(mac,user_id) VALUES (?,?)",
-                           ((mac, user_id) for user_id in user_ids - current))
+            store.change_device_profiles(mac, user_ids, datetime.now(ZoneInfo("UTC")))
         return {"ok": True}
 
     @app.post("/api/assign", dependencies=[Depends(mutation_guard)])
@@ -330,7 +327,8 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
     @app.get("/api/usage", dependencies=[Depends(authenticate)])
     def usage(days: int = Query(7, ge=1, le=366), start: date | None = None,
               end: date | None = None, user_id: int | None = None, mac: str | None = None):
-        today = datetime.now(ZoneInfo(settings.timezone)).date()
+        now = datetime.now(ZoneInfo(settings.timezone))
+        today = now.date()
         if (start is None) != (end is None):
             raise HTTPException(422, "Specifica entrambe le date.")
         if start is None:
@@ -345,6 +343,7 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
         with store.lock:
             report = store.usage_report(start, end, user_id=user_id, mac=mac)
             selected = store.sample_retention()
+        report["coverage"] = coverage_slots(report["coverage"], report["coverage_start"], start, end, now)
         return JSONResponse({
             **report,
             "start": start.isoformat(),
@@ -356,7 +355,7 @@ def create_app(settings: Settings | None = None, *, store: Store | None = None, 
             "retention_default": settings.retention_days,
             "source": "Inventario Deco" if settings.mode == "deco" else "Simulazione",
             "label": "Presenza in rete osservata per minuto UTC e velocità istantanee (KB/s). "
-                     "I profili usano le assegnazioni attuali.",
+                     "I profili usano le assegnazioni registrate nel minuto di ciascun campione.",
         }, headers=NO_CACHE)
 
     @app.put("/api/usage/retention", dependencies=[Depends(mutation_guard)])

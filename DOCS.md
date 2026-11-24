@@ -1,4 +1,4 @@
-# Deco Family Control 0.4.0
+# Deco Family Control 0.5.0
 
 ## Installare o aggiornare l’app Home Assistant
 
@@ -7,9 +7,16 @@
 3. In `protected_macs` puoi indicare, separati da virgole, i MAC dell’host Home Assistant, degli apparati di rete e dei dispositivi amministrativi. Usa `retention_days` per conservare i campioni degli ultimi N giorni locali, incluso oggi. Il valore `0` conserva tutti i campioni già presenti e quelli futuri. Salva e riavvia dopo aver cambiato le opzioni.
 4. Apri **Interfaccia web** dalla sessione amministratore. Controlla la versione accanto al titolo. In **Dispositivi** premi **Leggi dal Deco**. Se la configurazione è incompleta l’app indica l’opzione da correggere e mantiene aperta la dashboard.
 
-SQLite risiede in `/data/inventory/family.sqlite3` quando l’inventario reale è abilitato. L’aggiornamento aggiunge tabelle e colonne, conservando profili, associazioni e campioni. Le fasce precedenti sono classificate come Offtime. La simulazione di Home Assistant usa un database temporaneo separato. I backup possono contenere configurazioni protette e dati familiari. Conservali in locale o in una destinazione protetta.
+SQLite risiede in `/data/inventory/family.sqlite3` quando l’inventario reale è abilitato. L’aggiornamento aggiunge tabelle e colonne, conservando profili, associazioni e campioni. Le fasce precedenti sono classificate come Offtime. Dalla 0.5.0, la simulazione di Home Assistant usa il database persistente separato `/data/simulation/family.sqlite3`. Attivando o disattivando l’inventario selezioni una delle due basi dati. L’istanza reale continua a usare il percorso preesistente. I backup possono contenere configurazioni protette e dati familiari. Conservali in locale o in una destinazione protetta.
 
 L’app usa solo Ingress, con accesso amministratore, senza esporre porte per la dashboard. La password Deco resta nelle opzioni protette e non viene copiata in SQLite. Per la variante Docker autonoma, usa la [procedura del README](README.md#quickstart-safe-simulation).
+
+## Backup, ripristino e provenienza dell’app
+
+- Per una nuova installazione usa come sorgente stabile `https://github.com/JRcode197/deco-family-control` nello store di Home Assistant. Se hai già installato l’app da un URL con branch esplicito, Home Assistant può attribuirle un identificativo diverso. Prima di cambiare sorgente, verifica quale istanza contiene i tuoi dati.
+- Prima di aggiornare, vai in **Impostazioni → Sistema → Backup** e crea un backup manuale includendo **Deco Family Control**. L’app dichiara il backup a freddo. Conserva il backup e la chiave necessaria per aprirlo. Il backup contiene i dati e può contenere le opzioni protette.
+- Per ripristinare l’istanza dallo stesso repository, seleziona il backup in **Backup**, scegli **Ripristina** e seleziona l’app. Dopo il ripristino verifica alias, assegnazioni, regole, presenza dello storico e configurazione. Se vuoi passare da una sorgente Git all’altra, conserva entrambe le istanze finché non hai verificato il trasferimento del database. Un ripristino standard riguarda l’identificativo originale e le due installazioni non condividono lo stesso volume.
+- La CI verifica su `amd64` e `aarch64` la build, l’avvio, la risposta al peer Ingress simulato e il recupero dei dati dopo una copia a freddo del volume. Per il collaudo su Home Assistant OS, aggiungi il repository allo store, installa, apri via Ingress e aggiorna un’istanza con dati di prova su ciascuna delle due architetture.
 
 ## Persone, regole e precedenze
 
@@ -49,7 +56,8 @@ Questa configurazione è indipendente dal Deco. L’app salva le impostazioni ed
 ## Statistiche e privacy
 
 - **Ultima presenza online** è l’ultimo campione che indicava il dispositivo online. L’inventario può includere client Wi-Fi e cablati. Lo stato online in tempo reale è rappresentato dall’ultima lettura riuscita. Durante un errore, l’app segnala lo stato precedente come non aggiornato.
-- **Presenza campionata** conta i minuti UTC con almeno un’osservazione online. Un profilo conta una sola volta il minuto anche con più dispositivi, in base alle assegnazioni attuali. I giorni sono raggruppati nel fuso locale. Intervalli senza osservazioni restano assenti.
+- **Presenza campionata** conta i minuti UTC con almeno un’osservazione online. Un profilo conta una sola volta il minuto anche con più dispositivi, in base alle assegnazioni registrate nel minuto UTC del campione. Dal primo avvio della 0.5.0, le modifiche nello stesso minuto determinano l’assegnazione finale di quel minuto. I campioni precedenti restano disponibili per dispositivo e l’attribuzione storica ai profili è sconosciuta. I giorni sono raggruppati nel fuso locale. Intervalli senza osservazioni restano assenti.
+- **Copertura delle letture** mostra i minuti con almeno una lettura riuscita e quelli con soli errori. Una vista giornaliera usa fasce orarie, i periodi più lunghi usano giorni. Una fascia senza esito indica assenza di osservazioni conservate. La copertura riguarda l’intera rete, anche quando filtri i risultati su un dispositivo o profilo, e segue lo stesso periodo di conservazione dei campioni.
 - **Velocità media e massima** usano i valori istantanei in KB/s restituiti dal Deco. La tabella mostra quanti campioni hanno quel valore. Un campione esplicitamente pari a zero è distinto da un valore assente. Le medie non forniscono il volume trasferito. Tempo attivo Internet, tempo di utilizzo per app e tempo-schermo restano indisponibili.
 - In **Statistiche della rete**, scegli periodo, persona, dispositivo e ordinamento. Puoi aprire la vista di un dispositivo direttamente dall’inventario. Il riepilogo per dispositivo include presenza, giorni osservati, ultima presenza e statistiche di velocità. **Persone · statistiche aggregate** mostra i dati del profilo nel periodo selezionato. I dispositivi condivisi contribuiscono a ogni profilo associato. Le velocità aggregate sono statistiche sui campioni dei singoli dispositivi. Lo storico giornaliero si può espandere. **Conservazione dei campioni** offre periodi mobili da 7, 30, 90 o 180 giorni, incluso oggi, oppure conservazione senza scadenza. La scelta è salvata nel database, ha precedenza su `retention_days` e rimuove subito i campioni fuori periodo. La pulizia continua automaticamente durante le letture del Deco. Con **Usa le impostazioni dell’app** torni al valore configurato nelle opzioni. Puoi anche eliminare i campioni fino a una data inclusa o eliminare l’intero storico campionato. Restano inventario, regole, ultimo stato e registro delle operazioni.
 - Le **Quote Internet** memorizzano gli obiettivi per giorno. Il tempo di presenza e le velocità campionate non vengono usati per bloccare automaticamente la rete reale.

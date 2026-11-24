@@ -81,17 +81,20 @@ def test_shutdown_waits_for_poll_before_closing_store(tmp_path):
         store.users()
 
 
-def test_home_assistant_ingress_requires_supervisor_and_action_header(monkeypatch):
+def test_home_assistant_ingress_requires_supervisor_and_action_header(monkeypatch, tmp_path):
     from app.config import from_env
     from app.main import SUPERVISOR_IP
 
+    db = str(tmp_path / "simulation" / "family.sqlite3")
+    monkeypatch.setattr("app.config.HA_SIMULATION_DATABASE_PATH", db)
+    monkeypatch.setattr("app.config.HA_OPTIONS_PATH", tmp_path / "options.json")
     monkeypatch.setenv("DECO_HA_INGRESS", "true")
     monkeypatch.setenv("DECO_MODE", "deco")
     monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
     settings = from_env()
     assert settings.mode == "mock"
     assert settings.writes_enabled is False
-    assert settings.database_path == ":memory:"
+    assert settings.database_path == db
 
     with TestClient(create_app(settings), client=("192.168.1.15", 9000)) as direct:
         spoofed = {"X-Forwarded-For": SUPERVISOR_IP, "X-Ingress-Path": "/ingress"}

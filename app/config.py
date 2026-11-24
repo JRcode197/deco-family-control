@@ -10,6 +10,7 @@ from app.deco import normalize_mac
 
 HA_OPTIONS_PATH = Path("/data/options.json")
 HA_DATABASE_PATH = "/data/inventory/family.sqlite3"
+HA_SIMULATION_DATABASE_PATH = "/data/simulation/family.sqlite3"
 PRIVATE_LAN_RANGES = tuple(IPv4Network(cidr) for cidr in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 
 
@@ -63,19 +64,19 @@ def ha_settings() -> Settings:
         raise ValueError("Impossibile leggere le opzioni Home Assistant.") from None
     if not isinstance(options, dict):
         raise ValueError("Formato delle opzioni Home Assistant non valido.")
+    inventory_enabled = options.get("inventory_enabled") is True
+    settings = Settings(ha_ingress=True, mode="deco" if inventory_enabled else "mock",
+                        database_path=HA_DATABASE_PATH if inventory_enabled else HA_SIMULATION_DATABASE_PATH)
     try:
         exempt_macs = protected_macs(options.get("protected_macs", ""))
         retention = options.get("retention_days", 0)
         if type(retention) is not int or not 0 <= retention <= 3650:
             raise ValueError
     except (ValueError, AttributeError):
-        settings = Settings(ha_ingress=True, mode="deco", database_path=HA_DATABASE_PATH)
         return replace(settings, inventory_setup_error="Controlla retention_days e protected_macs.")
-    if options.get("inventory_enabled") is not True:
-        return Settings(ha_ingress=True, database_path=":memory:", protected_macs=exempt_macs)
-
-    settings = Settings(mode="deco", ha_ingress=True, database_path=HA_DATABASE_PATH,
-                        retention_days=retention, protected_macs=exempt_macs)
+    settings = replace(settings, retention_days=retention, protected_macs=exempt_macs)
+    if not inventory_enabled:
+        return settings
     ip = options.get("deco_ip", settings.router_ip)
     username = options.get("deco_username", settings.router_user)
     password = options.get("deco_password")
