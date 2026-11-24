@@ -1,6 +1,6 @@
 name: Deco Family Control
 description: Profili, regole locali e inventario Deco X50 in sola lettura.
-version: "0.3.1"
+version: "0.4.0"
 slug: deco_family_control
 url: https://github.com/JRcode197/deco-family-control
 arch:

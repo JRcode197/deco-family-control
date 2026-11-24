@@ -1,3 +1,9 @@
+## 0.4.0
+
+- Dispositivi associabili a più profili e alias persistenti ricercabili.
+- Statistiche per dispositivo e riepiloghi per persona con periodi, filtri e ordinamenti.
+- Migrazione delle associazioni esistenti in SQLite.
+
 ## 0.3.1
 
 - Conservazione automatica dei campioni dalla dashboard con periodi da 7, 30, 90 o 180 giorni e scelta persistente.

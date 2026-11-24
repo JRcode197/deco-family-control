@@ -104,6 +104,7 @@ class Store:
                     "devices": {
                         "profile_exempt": "INTEGER NOT NULL DEFAULT 0",
                         "last_online": "TEXT",
+                        "alias": "TEXT NOT NULL DEFAULT ''",
                     },
                     "windows": {
                         "kind": "TEXT NOT NULL DEFAULT 'offtime'",
@@ -124,6 +125,17 @@ class Store:
                                     FROM minute_samples WHERE mac=devices.mac
                                 )""")
 
+                if not self.db.execute("SELECT 1 FROM sqlite_master WHERE name='device_profiles'").fetchone():
+                    self.db.execute("""CREATE TABLE device_profiles (
+                        mac TEXT NOT NULL REFERENCES devices(mac) ON DELETE CASCADE,
+                        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        exempt INTEGER NOT NULL DEFAULT 0 CHECK(exempt IN (0,1)),
+                        PRIMARY KEY(mac,user_id)
+                    )""")
+                    self.db.execute("CREATE INDEX ix_device_profiles_user ON device_profiles(user_id,mac)")
+                    self.db.execute("""INSERT INTO device_profiles(mac,user_id,exempt)
+                        SELECT d.mac,d.user_id,d.profile_exempt FROM devices d JOIN users u ON u.id=d.user_id""")
+
     def query(self, sql: str, args: tuple = ()) -> list[dict]:
         with self.lock:
             return [dict(r) for r in self.db.execute(sql, args).fetchall()]
@@ -136,11 +148,27 @@ class Store:
         return self.query("SELECT * FROM users ORDER BY name")
 
     def devices(self, sample_minute: str | None = None, *, snapshot_at: str | None = None) -> list[dict]:
-        return self.query("""SELECT d.*, u.name AS user_name, s.up_kbs, s.down_kbs,
-          CASE WHEN d.last_seen=? THEN 1 ELSE 0 END AS in_latest_snapshot
-          FROM devices d LEFT JOIN users u ON u.id = d.user_id
-          LEFT JOIN minute_samples s ON d.online=1 AND s.mac=d.mac AND s.minute=?
-          ORDER BY d.name""", (snapshot_at, sample_minute))
+        with self.lock:
+            devices = self.query("""SELECT d.*, s.up_kbs, s.down_kbs,
+              CASE WHEN d.last_seen=? THEN 1 ELSE 0 END AS in_latest_snapshot
+              FROM devices d LEFT JOIN minute_samples s ON d.online=1 AND s.mac=d.mac AND s.minute=?
+              ORDER BY COALESCE(NULLIF(d.alias,''),d.name) COLLATE NOCASE, d.mac""",
+                (snapshot_at, sample_minute))
+            assignments = self.query("""SELECT p.*,u.name FROM device_profiles p
+                JOIN users u ON u.id=p.user_id ORDER BY p.user_id""")
+        by_mac = {}
+        for membership in assignments:
+            by_mac.setdefault(membership["mac"], []).append(membership)
+        for device in devices:
+            memberships = by_mac.get(device["mac"], [])
+            device["user_ids"] = [row["user_id"] for row in memberships]
+            device["user_names"] = [row["name"] for row in memberships]
+            device["profile_exemptions"] = [row["user_id"] for row in memberships if row["exempt"]]
+            # Preserve the former API fields for single-profile clients.
+            device["user_id"] = device["user_ids"][0] if memberships else None
+            device["user_name"] = device["user_names"][0] if memberships else None
+            device["profile_exempt"] = memberships[0]["exempt"] if memberships else 0
+        return devices
 
     def windows(self) -> list[dict]:
         return self.query("SELECT * FROM windows ORDER BY user_id, weekday, start_time")
@@ -178,40 +206,53 @@ class Store:
     def usage(self, day: str) -> dict:
         individual = self.query("""SELECT mac, COUNT(*) AS minutes FROM minute_samples
           WHERE day=? GROUP BY mac""", (day,))
-        collective = self.query("""SELECT d.user_id, COUNT(DISTINCT s.minute) AS minutes
-          FROM minute_samples s JOIN devices d ON d.mac=s.mac
-          WHERE s.day=? AND d.user_id IS NOT NULL GROUP BY d.user_id""", (day,))
+        collective = self.query("""SELECT p.user_id, COUNT(DISTINCT s.minute) AS minutes
+          FROM minute_samples s JOIN device_profiles p USING(mac)
+          WHERE s.day=? GROUP BY p.user_id""", (day,))
         return {"devices": {x["mac"]: x["minutes"] for x in individual},
                 "users": {x["user_id"]: x["minutes"] for x in collective}}
 
     def usage_report(self, start: date, end: date, *, user_id: int | None = None,
-                     mac: str | None = None) -> tuple[list[dict], list[dict]]:
+                     mac: str | None = None) -> dict:
         where = ["s.day BETWEEN ? AND ?"]
         args = [start.isoformat(), end.isoformat()]
         if user_id is not None:
-            where.append("d.user_id=?")
+            where.append("EXISTS (SELECT 1 FROM device_profiles p WHERE p.mac=s.mac AND p.user_id=?)")
             args.append(user_id)
         if mac is not None:
-            where.append("d.mac=?")
+            where.append("s.mac=?")
             args.append(mac)
         scope = " AND ".join(where)
+        speeds = """COUNT(up_kbs) AS up_samples, COUNT(down_kbs) AS down_samples,
+            ROUND(AVG(up_kbs), 1) AS average_up_kbs, ROUND(AVG(down_kbs), 1) AS average_down_kbs,
+            MAX(up_kbs) AS max_up_kbs, MAX(down_kbs) AS max_down_kbs"""
+        profile_filter = " AND p.user_id=?" if user_id is not None else ""
+        profile_args = (*args, user_id) if user_id is not None else tuple(args)
+        membership = ("?" if user_id is not None else
+                      "(SELECT MIN(p.user_id) FROM device_profiles p WHERE p.mac=s.mac)")
+        device_args = (user_id, *args) if user_id is not None else tuple(args)
         with self.lock:
-            devices = self.query(f"""SELECT day, d.user_id, d.mac, COUNT(*) AS minutes,
-              COUNT(up_kbs) AS up_samples, COUNT(down_kbs) AS down_samples,
-              ROUND(AVG(up_kbs), 1) AS average_up_kbs,
-              ROUND(AVG(down_kbs), 1) AS average_down_kbs,
-              MAX(up_kbs) AS max_up_kbs, MAX(down_kbs) AS max_down_kbs
-              FROM minute_samples s JOIN devices d USING(mac) WHERE {scope}
-              GROUP BY day, d.user_id, d.mac ORDER BY day DESC, d.mac""", tuple(args))
-            profiles = self.query(f"""SELECT day, d.user_id, COUNT(DISTINCT s.minute) AS minutes
-              FROM minute_samples s JOIN devices d USING(mac) WHERE {scope} AND d.user_id IS NOT NULL
-              GROUP BY day, d.user_id ORDER BY day DESC, d.user_id""", tuple(args))
-        return devices, profiles
+            devices = self.query(f"""SELECT s.day, {membership} AS user_id, s.mac,
+                COUNT(*) AS minutes, {speeds} FROM minute_samples s WHERE {scope}
+                GROUP BY s.day,s.mac ORDER BY s.day DESC,s.mac""", device_args)
+            profiles = self.query(f"""SELECT s.day,p.user_id,COUNT(DISTINCT s.minute) AS minutes
+                FROM minute_samples s JOIN device_profiles p USING(mac) WHERE {scope}{profile_filter}
+                GROUP BY s.day,p.user_id ORDER BY s.day DESC,p.user_id""", profile_args)
+            device_totals = self.query(f"""SELECT s.mac,COUNT(*) AS minutes,
+                COUNT(DISTINCT s.day) AS observed_days, {speeds}
+                FROM minute_samples s WHERE {scope} GROUP BY s.mac""", tuple(args))
+            profile_totals = self.query(f"""SELECT p.user_id,COUNT(DISTINCT s.minute) AS minutes,
+                COUNT(DISTINCT s.day) AS observed_days,COUNT(DISTINCT s.mac) AS observed_devices, {speeds}
+                FROM minute_samples s JOIN device_profiles p USING(mac) WHERE {scope}{profile_filter}
+                GROUP BY p.user_id""", profile_args)
+            network_days = self.query(f"""SELECT s.day,COUNT(DISTINCT s.minute) AS minutes
+                FROM minute_samples s WHERE {scope} GROUP BY s.day ORDER BY s.day DESC""", tuple(args))
+        return {"data": devices, "profiles": profiles, "device_totals": device_totals,
+                "profile_totals": profile_totals, "network_days": network_days}
 
     def daily_usage(self, days: int = 7, *, today: date | None = None) -> list[dict]:
         today = today or date.today()
-        devices, _ = self.usage_report(today - timedelta(days=days - 1), today)
-        return devices
+        return self.usage_report(today - timedelta(days=days - 1), today)["data"]
 
     def sample_retention(self) -> int | None:
         rows = self.query("SELECT days FROM sample_retention WHERE id=1")

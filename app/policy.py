@@ -67,10 +67,12 @@ def profile_reason(now: datetime, user: dict, windows: list[dict]) -> str | None
     return None
 
 
-def device_reason(device: dict, inherited_reason: str | None) -> str | None:
+def device_reason(device: dict, profile_reasons: dict[int, str | None]) -> str | None:
     if device["manually_blocked"]:
         return "manuale_dispositivo"
-    return None if device.get("profile_exempt") else inherited_reason
+    reasons = {profile_reasons.get(user_id) for user_id in device["user_ids"]
+               if user_id not in device["profile_exemptions"]}
+    return next((reason for reason in ("manuale", "bedtime", "offtime", "limite_presenza") if reason in reasons), None)
 
 
 def next_transitions(now: datetime, user: dict, windows: list[dict]) -> dict:

@@ -213,8 +213,9 @@ def profiles_router(store, settings, engine, authenticate, mutation_guard) -> AP
     def delete_user(user_id: int):
         with store.policy_change("eliminazione_profilo", f"profilo={user_id}") as db:
             profile(user_id)
-            db.execute("DELETE FROM dns_devices WHERE mac IN (SELECT mac FROM devices WHERE user_id=?)", (user_id,))
-            db.execute("UPDATE devices SET profile_exempt=0 WHERE user_id=?", (user_id,))
+            db.execute("""DELETE FROM dns_devices WHERE mac IN (
+                SELECT mac FROM device_profiles GROUP BY mac HAVING COUNT(*)=1 AND MIN(user_id)=?
+            )""", (user_id,))
             db.execute("DELETE FROM users WHERE id=?", (user_id,))
         return after_change()
 
@@ -222,10 +223,15 @@ def profiles_router(store, settings, engine, authenticate, mutation_guard) -> AP
     def preview_user(user_id: int):
         with store.lock:
             user = profile(user_id)
-            rules = windows(user_id)
-            devices = store.query("SELECT * FROM devices WHERE user_id=?", (user_id,))
+            all_rules = store.windows()
+            users = store.users()
+            devices = [device for device in store.devices() if user_id in device["user_ids"]]
         now = datetime.now(zone)
-        reason = profile_reason(now, user, rules)
+        rules = [rule for rule in all_rules if rule["user_id"] == user_id]
+        reasons = {person["id"]: profile_reason(
+            now, person, [rule for rule in all_rules if rule["user_id"] == person["id"]]
+        ) for person in users}
+        reason = reasons[user_id]
         return JSONResponse({
             "checked_at": now.isoformat(),
             "timezone": settings.timezone,
@@ -240,7 +246,7 @@ def profiles_router(store, settings, engine, authenticate, mutation_guard) -> AP
             "devices": [{
                 "mac": d["mac"],
                 "protected": d["mac"] in settings.protected_macs,
-                "reason": None if d["mac"] in settings.protected_macs else device_reason(d, reason),
+                "reason": None if d["mac"] in settings.protected_macs else device_reason(d, reasons),
             } for d in devices],
             **next_transitions(now, user, rules),
         }, headers={"Cache-Control": "no-store"})
@@ -268,6 +274,19 @@ def profiles_router(store, settings, engine, authenticate, mutation_guard) -> AP
             db.execute("UPDATE users SET manually_blocked=?,override_until=? WHERE id=?", (manual, until, user_id))
         return after_change()
 
+    @router.put("/{user_id}/devices/{mac}", dependencies=mutating)
+    def add_device(user_id: int, mac: str):
+        try:
+            mac = normalize_mac(mac)
+        except ValueError:
+            raise HTTPException(422, "Indirizzo MAC non valido.") from None
+        with store.policy_change("assegnazione_dispositivo", f"profilo={user_id}") as db:
+            profile(user_id)
+            if not store.query("SELECT mac FROM devices WHERE mac=?", (mac,)):
+                raise HTTPException(404, "Dispositivo non trovato.")
+            db.execute("INSERT OR IGNORE INTO device_profiles(mac,user_id) VALUES (?,?)", (mac, user_id))
+        return after_change()
+
     @router.put("/{user_id}/devices/{mac}/exception", dependencies=mutating)
     def device_exception(user_id: int, mac: str, payload: DeviceException):
         try:
@@ -275,7 +294,7 @@ def profiles_router(store, settings, engine, authenticate, mutation_guard) -> AP
         except ValueError:
             raise HTTPException(422, "Indirizzo MAC non valido.") from None
         with store.policy_change("eccezione_dispositivo", f"profilo={user_id}") as db:
-            changed = db.execute("UPDATE devices SET profile_exempt=? WHERE mac=? AND user_id=?",
+            changed = db.execute("UPDATE device_profiles SET exempt=? WHERE mac=? AND user_id=?",
                                  (int(payload.exempt), mac, user_id))
             if not changed.rowcount:
                 raise HTTPException(404, "Dispositivo non assegnato a questo profilo.")

@@ -244,3 +244,49 @@ def test_sample_retention_saved_pruned_and_applied_after_restart(ha_client):
         restarted.put(uri, json={"days": None}).raise_for_status()
         report = restarted.get("/api/usage").json()
         assert report["retention_override"] is None and report["retention_days"] == 0
+
+
+def test_shared_device_alias_and_period_aggregates_survive_restart(ha_client):
+    connect, snapshots, _ = ha_client
+    with connect() as client:
+        client.post("/api/refresh").raise_for_status()
+        first = client.post("/api/users", json={"name": "Profilo uno"}).json()["id"]
+        second = client.post("/api/users", json={"name": "Profilo due"}).json()["id"]
+        shared = f"/api/devices/{DEVICE_1}"
+        assert client.put(shared + "/alias", json={"alias": "Tablet condiviso"},
+                          headers={"X-Family-Action": "0"}).status_code == 403
+        client.put(shared + "/alias", json={"alias": "  Tablet condiviso  "}).raise_for_status()
+        client.put(shared + "/profiles", json={"user_ids": [first, second]}).raise_for_status()
+        assert client.put(shared + "/profiles", json={"user_ids": [first, 999]}).status_code == 404
+        client.put(f"/api/users/{first}/devices/{DEVICE_2}").raise_for_status()
+
+        report = client.get("/api/usage?days=7").raise_for_status().json()
+        rows = {row["user_id"]: row for row in report["profile_totals"]}
+        assert rows[first]["minutes"] == rows[second]["minutes"] == 1
+        assert rows[first]["observed_devices"] == 2 and rows[second]["observed_devices"] == 1
+        assert rows[first]["average_down_kbs"] == rows[second]["average_down_kbs"] == 40
+        assert rows[first]["down_samples"] == 1
+        assert sum(row["mac"] == DEVICE_1 for row in report["data"]) == 1
+        scoped = client.get(f"/api/usage?user_id={second}").json()
+        assert [row["mac"] for row in scoped["data"]] == [DEVICE_1]
+        assert [row["user_id"] for row in scoped["profile_totals"]] == [second]
+
+        client.post(f"/api/users/{second}/action", json={"action": "block"}).raise_for_status()
+        for user in (first, second):
+            preview = client.get(f"/api/users/{user}/preview").json()
+            assert next(row for row in preview["devices"] if row["mac"] == DEVICE_1)["reason"] == "manuale"
+        client.put(f"/api/users/{first}/devices/{DEVICE_1}/exception", json={"exempt": True}).raise_for_status()
+        client.put(shared + "/profiles", json={"user_ids": [first, second]}).raise_for_status()
+
+    snapshots[0].name = "Nuovo nome Deco"
+    snapshots[0].ip = "192.168.1.20"
+    with connect() as restarted:
+        restarted.post("/api/refresh").raise_for_status()
+        def device():
+            return next(row for row in restarted.get("/api/state").json()["devices"] if row["mac"] == DEVICE_1)
+        assert device()["alias"] == "Tablet condiviso" and device()["name"] == "Nuovo nome Deco"
+        assert device()["user_ids"] == [first, second] and device()["profile_exemptions"] == [first]
+        restarted.delete(f"/api/users/{first}").raise_for_status()
+        assert device()["user_ids"] == [second] and device()["profile_exemptions"] == []
+        restarted.put(shared + "/alias", json={"alias": ""}).raise_for_status()
+        assert device()["alias"] == ""

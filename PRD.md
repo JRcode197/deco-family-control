@@ -7,7 +7,7 @@ Build a local-first, completely free **network-level** parental control web app 
 ## 2. Priority requirements
 
 **P0**
-- Discovered network devices persisted by normalized MAC; assign/unassign to named profiles (initial examples Alice and Anna), many-to-one mapping, stable across IP change.
+- Discovered network devices persisted by normalized MAC; assign/unassign to one or more named profiles and edit a searchable alias, with associations stable across IP changes.
 - Admin sign-in; safe default no Deco writes; user-friendly Italian mobile dashboard.
 - Manual Internet block/unblock by individual device or by owner profile.
 - Recurring scheduled Internet windows with daily/weekday combinations and overnight crossing.
